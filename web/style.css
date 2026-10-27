@@ -50,11 +50,6 @@ main {
   margin: 60px auto;
   padding: 0 32px;
 }
-.eyebrow {
-  font-size: 11px;
-  letter-spacing: 2px;
-  color: var(--green);
-}
 h1 {
   font-size: 38px;
   letter-spacing: -1px;
@@ -66,8 +61,7 @@ h1 {
   align-items: center;
 }
 #updated,
-.note,
-footer {
+.note {
   color: var(--muted);
   font-size: 12px;
 }
@@ -212,9 +206,6 @@ svg polyline {
 }
 .error {
   color: var(--red);
-}
-footer {
-  margin-top: 42px;
 }
 @media (max-width: 750px) {
   header {
