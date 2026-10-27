@@ -74,7 +74,7 @@ Actual sends validate Telegram's HTTP and JSON success response.
 Run this on the watchdog host with its own local database and SMTP credentials. It checks
 the primary's authenticated health endpoint, stale monitoring, notification backlog, and
 the primary's Telegram probe. It separately probes Telegram from the watchdog host. Three failed
-polls trigger an email; recovery triggers another. Watchdog state survives restart;
+polls trigger an email when SMTP is configured; recovery triggers another. Watchdog state survives restart;
 failed emails retry next poll. Email submission requires verified STARTTLS
 (typically SMTP port 587); implicit TLS on port 465 is not supported. Use an
 external mail provider independent of the primary. One recipient per configuration.
@@ -113,8 +113,7 @@ No Uptime Kuma code, images or other assets have been copied. The UI uses native
 browser JavaScript and CSS, embedded in the Go executable. No frontend build step.
 
 Not yet included: maintenance scheduling, browser Web Push, notification resend
-controls, long-term charts, bulk-import tools, detailed DNS/ICMP checks, and
-production packaging. Telegram and SMTP delivery require live credential testing
+controls, long-term charts, bulk-import tools, detailed DNS/ICMP checks. Telegram and SMTP delivery require live credential testing
 before deployment. Resource usage must be measured on target hardware before
 setting production limits; Go alone is not a resource guarantee.
 
@@ -123,3 +122,7 @@ For browser checks, set `PLAYWRIGHT_MODULE` to an installed `playwright-core`
 module and optionally `CHROMIUM_PATH` to a compatible Chromium executable.
 The smoke test creates temporary local services, synthetic secrets and a temporary
 database, and removes them afterward. Browser dependencies are development-only.
+
+The watchdog may run before email is configured: omit `smtp` entirely for
+observation-only operation. It persists state and logs transitions, but cannot
+send independent fallback alerts until a complete SMTP configuration is added.

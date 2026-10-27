@@ -44,8 +44,9 @@ type Monitor struct {
 	MaxAge         string `yaml:"max_age"`
 }
 type Telegram struct {
-	TokenEnv  string `yaml:"token_env"`
-	ChatIDEnv string `yaml:"chat_id_env"`
+	RelayAddress string `yaml:"relay_address"`
+	TokenEnv     string `yaml:"token_env"`
+	ChatIDEnv    string `yaml:"chat_id_env"`
 }
 type Watchdog struct {
 	URL              string `yaml:"url"`
@@ -156,6 +157,11 @@ func loadConfig(path string) (Config, error) {
 			return c, fmt.Errorf("%s: unsupported type", m.ID)
 		}
 	}
+	if c.Telegram.RelayAddress != "" {
+		if _, _, e := net.SplitHostPort(c.Telegram.RelayAddress); e != nil {
+			return c, errors.New("invalid Telegram relay_address")
+		}
+	}
 	if (c.Telegram.TokenEnv == "") != (c.Telegram.ChatIDEnv == "") {
 		return c, errors.New("Telegram requires token_env and chat_id_env")
 	}
@@ -170,13 +176,17 @@ func loadConfig(path string) (Config, error) {
 		if e != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || duration(w.Interval) < time.Second || duration(w.MaxAge) <= 0 {
 			return c, errors.New("invalid watchdog URL/timing")
 		}
-		if w.PasswordEnv == "" || w.SMTP.Address == "" || w.SMTP.From == "" || w.SMTP.To == "" {
-			return c, errors.New("watchdog needs authentication and SMTP fallback")
+		if w.PasswordEnv == "" {
+			return c, errors.New("watchdog needs primary authentication")
+		}
+		smtpSet := w.SMTP.Address != "" || w.SMTP.From != "" || w.SMTP.To != "" || w.SMTP.User != "" || w.SMTP.PasswordEnv != ""
+		if smtpSet && (w.SMTP.Address == "" || w.SMTP.From == "" || w.SMTP.To == "") {
+			return c, errors.New("incomplete SMTP fallback configuration")
 		}
 		if w.SMTP.User != "" && w.SMTP.PasswordEnv == "" {
 			return c, errors.New("SMTP password_env is required when user is set")
 		}
-		if _, _, e := net.SplitHostPort(w.SMTP.Address); e != nil {
+		if _, _, e := net.SplitHostPort(w.SMTP.Address); w.SMTP.Address != "" && e != nil {
 			return c, e
 		}
 	}

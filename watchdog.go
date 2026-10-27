@@ -77,6 +77,7 @@ func runWatchdog(ctx context.Context, c Config, s *Store) error {
 		}
 		for name, err := range checks {
 			st := states[name]
+			previous := st.Status
 			if err != nil {
 				st.Failures++
 				if st.Failures >= 3 {
@@ -86,7 +87,11 @@ func runWatchdog(ctx context.Context, c Config, s *Store) error {
 				st.Failures = 0
 				st.Status = "up"
 			}
-			if st.Status != "" && st.LastSent != st.Status && (st.Status == "down" || st.LastSent == "down") {
+			if w.SMTP.Address == "" {
+				if st.Status != previous {
+					log.Printf("%s: %s (fallback email not configured)", name, st.Status)
+				}
+			} else if st.Status != "" && st.LastSent != st.Status && (st.Status == "down" || st.LastSent == "down") {
 				probe, cancel = context.WithTimeout(ctx, 20*time.Second)
 				e := sendEmail(probe, w.SMTP, "Watchdog observer: "+name+" is "+st.Status)
 				cancel()

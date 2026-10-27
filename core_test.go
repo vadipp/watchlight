@@ -319,3 +319,13 @@ func BenchmarkRecord(b *testing.B) {
 		}
 	}
 }
+
+func TestWatchdogCanRunWithoutEmail(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "watchdog.yaml")
+	if e := os.WriteFile(p, []byte("owner_password_env: PASS\nwatchdog:\n  url: https://status.example.com/api/health\n  password_env: PASS\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := loadConfig(p); e != nil {
+		t.Fatal(e)
+	}
+}

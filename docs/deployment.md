@@ -55,3 +55,12 @@ The scratch runtime contains the executable and CA certificates. Rebuild images
 to update either. Database storage is independent of image updates. Resource caps
 are starting limits, not promises of supported capacity; measure your workload.
 Do not run `docker compose down -v` when preserving monitoring history.
+
+### Telegram TCP relay
+
+An optional `telegram.relay_address: relay.example.com:7443` sends the primary's
+Telegram TCP connections through an existing transparent TLS relay. The URL,
+HTTP Host and TLS server name remain `api.telegram.org`, with normal certificate
+verification. This does not use an HTTP reverse proxy or disable TLS validation.
+Restrict the relay to a trusted/private network. The watchdog still probes
+Telegram directly from its own host to provide an independent observation.

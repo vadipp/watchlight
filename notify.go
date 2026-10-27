@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/smtp"
 	"net/url"
@@ -14,13 +15,29 @@ import (
 	"time"
 )
 
+func newTelegramClient(relay string) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if relay != "" {
+		transport.Proxy = nil
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			if address != "api.telegram.org:443" {
+				return nil, errors.New("unexpected Telegram destination")
+			}
+			return (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, network, relay)
+		}
+	}
+	return &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+}
 func telegramCall(ctx context.Context, token, method string, form url.Values) error {
+	return telegramCallUsing(ctx, http.DefaultClient, token, method, form)
+}
+func telegramCallUsing(ctx context.Context, client *http.Client, token, method string, form url.Values) error {
 	req, e := http.NewRequestWithContext(ctx, "POST", "https://api.telegram.org/bot"+token+"/"+method, strings.NewReader(form.Encode()))
 	if e != nil {
 		return errors.New("invalid Telegram request")
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r, e := http.DefaultClient.Do(req)
+	r, e := client.Do(req)
 	if e != nil {
 		return errors.New("Telegram connection failed")
 	}
@@ -37,6 +54,8 @@ func runNotifications(ctx context.Context, c Config, s *Store) {
 	if c.Telegram.TokenEnv == "" {
 		return
 	}
+	client := newTelegramClient(c.Telegram.RelayAddress)
+	defer client.CloseIdleConnections()
 	token, _ := secret(c.Telegram.TokenEnv)
 	chat, _ := secret(c.Telegram.ChatIDEnv)
 	lastProbe := time.Time{}
@@ -50,7 +69,7 @@ func runNotifications(ctx context.Context, c Config, s *Store) {
 		}
 		if time.Since(lastProbe) >= time.Minute {
 			probe, cancel := context.WithTimeout(ctx, 10*time.Second)
-			e := telegramCall(probe, token, "getMe", url.Values{})
+			e := telegramCallUsing(probe, client, token, "getMe", url.Values{})
 			cancel()
 			if e := s.setMeta("telegram", TelegramHealth{OK: e == nil, Checked: time.Now().Unix()}); e != nil {
 				log.Print("cannot persist Telegram health")
@@ -64,7 +83,7 @@ func runNotifications(ctx context.Context, c Config, s *Store) {
 			continue
 		}
 		callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		e := telegramCall(callCtx, token, "sendMessage", url.Values{"chat_id": {chat}, "text": {body}})
+		e := telegramCallUsing(callCtx, client, token, "sendMessage", url.Values{"chat_id": {chat}, "text": {body}})
 		cancel()
 		if e == nil {
 			if _, e = s.Exec("DELETE FROM outbox WHERE seq=?", seq); e != nil {
