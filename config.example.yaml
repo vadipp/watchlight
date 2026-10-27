@@ -1,0 +1,28 @@
+listen: 127.0.0.1:8080
+database: data/watchlight.db
+owner_user: owner
+owner_password_env: WATCHLIGHT_PASSWORD
+retention_days: 7
+# Uncomment to enable durable down/recovery notifications.
+# telegram:
+#   token_env: TELEGRAM_BOT_TOKEN
+#   chat_id_env: TELEGRAM_CHAT_ID
+monitors:
+  - id: example-web
+    name: Example website
+    type: http
+    target: https://example.com/
+    public: true
+    interval: 30s
+    timeout: 10s
+    failures: 3
+    successes: 1
+    expected_status: 200
+  - id: worker-heartbeat
+    name: Worker heartbeat
+    type: heartbeat
+    token_env: WORKER_HEARTBEAT_TOKEN
+    interval: 30s
+    max_age: 2m
+    public: false
+    failures: 3

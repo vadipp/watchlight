@@ -1,0 +1,7 @@
+/watchlight
+/data/
+/config.yaml
+*.db
+*.db-shm
+*.db-wal
+.env

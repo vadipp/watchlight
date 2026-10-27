@@ -1,0 +1,9 @@
+.git
+.env
+*.env
+config.yaml
+data
+watchlight
+*.db
+*.db-shm
+*.db-wal

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Watchlight · Service status</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">◈ Watchlight</a>
+      <nav>
+        <a href="/">Public status</a><a href="/dashboard">Owner dashboard</a>
+      </nav>
+    </header>
+    <main>
+      <p class="eyebrow">A CLEAR VIEW OF YOUR SERVICES</p>
+      <div class="heading">
+        <h1>Service status</h1>
+        <span id="updated">Connecting…</span>
+      </div>
+      <section id="summary" class="summary unknown" aria-live="polite">
+        Waiting for monitoring data
+      </section>
+      <p class="note">
+        Uptime uses observed checks over the last 24 hours. Unobserved time is
+        not counted as healthy.
+      </p>
+      <section id="delivery" class="note" hidden></section>
+      <div class="layout">
+        <aside>
+          <h2>Services</h2>
+          <div id="services"></div>
+        </aside>
+        <section id="detail">
+          <p>Select a service to see its history.</p>
+        </section>
+      </div>
+      <footer>Independent checks. A quieter kind of monitoring.</footer>
+    </main>
+  </body>
+</html>

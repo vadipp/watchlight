@@ -1,0 +1,25 @@
+version: "2.4"
+services:
+  watchdog:
+    image: watchlight:local
+    command: [watchdog, -config, /config.yaml]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    stop_grace_period: 30s
+    env_file: .env
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - watchlight-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+volumes:
+  watchlight-data:

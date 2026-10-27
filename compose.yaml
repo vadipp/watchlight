@@ -1,0 +1,26 @@
+services:
+  watchlight:
+    build: .
+    image: watchlight:local
+    command: [serve, -config, /config.yaml]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+    stop_grace_period: 30s
+    env_file: .env
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - watchlight-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+volumes:
+  watchlight-data:

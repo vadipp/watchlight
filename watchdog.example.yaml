@@ -1,0 +1,16 @@
+database: data/watchdog.db
+owner_password_env: WATCHLIGHT_PASSWORD
+monitors: []
+watchdog:
+  url: https://status.example.com/api/health
+  user: owner
+  password_env: WATCHLIGHT_PASSWORD
+  interval: 30s
+  max_age: 2m
+  telegram_token_env: TELEGRAM_BOT_TOKEN
+  smtp:
+    address: smtp.example.com:587
+    user: monitoring@example.com
+    password_env: SMTP_PASSWORD
+    from: monitoring@example.com
+    to: owner@example.com
