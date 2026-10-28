@@ -46,6 +46,9 @@ must be reached before recovery. An initial down event alerts; initial successfu
 startup does not. Missing scheduler progress appears as unknown, never healthy.
 Historical chart gaps are shown between observations. The current UI shows the
 latest 240 results, 24-hour observed success percentage and 30 recent transitions.
+The history strip groups results into up to 60 blocks to fit the screen. A block
+with any failed check is red; otherwise a monitoring gap makes it gray. Hover a
+block for its time range and check/failure counts.
 This percentage is sample-based, not a wall-clock availability SLA; unobserved
 intervals do not count as successes.
 

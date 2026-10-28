@@ -10,7 +10,12 @@ const el = (tag, text, cls) => {
   return n;
 };
 const fmt = (t) => new Date(t * 1000).toLocaleString();
+const historyObserver = new ResizeObserver((entries) => {
+  for (const { target, contentRect } of entries)
+    target.drawBars(contentRect.width);
+});
 function render() {
+  historyObserver.disconnect();
   const list = document.querySelector("#services");
   list.replaceChildren();
   if (!views.some((v) => v.id === selected)) selected = views[0]?.id;
@@ -74,21 +79,36 @@ function render() {
   detail.append(metrics);
   const h = [...v.history].reverse();
   const section = el("div", undefined, "section");
-  section.append(el("div", "Recent checks · latest 240 observations", "label"));
+  const historyLabel = el("div", undefined, "label");
+  section.append(historyLabel);
   const bars = el("div", undefined, "bars");
+  const observations = [];
   let prev = null;
   for (const p of h) {
     if (prev && p.time - prev.time > v.interval_seconds * 1.5) {
-      const gap = el("span", undefined, "bar unknown");
-      gap.title = "Monitoring gap";
-      bars.append(gap);
+      observations.push({ time: prev.time, gap: true });
     }
-    const bar = el("span", undefined, "bar " + (p.ok ? "up" : "down"));
-    bar.title = `${fmt(p.time)} · ${p.ok ? "success" : "failure"} · ${p.latency.toFixed(1)} ms`;
-    bars.append(bar);
+    observations.push(p);
     prev = p;
   }
+  bars.drawBars = (width) => {
+    // Keep blocks at least 8px wide with 4px gutters, even on phones.
+    const count = Math.min(60, Math.max(1, Math.floor((width + 4) / 12)));
+    const size = Math.max(1, Math.ceil(observations.length / count));
+    historyLabel.textContent = `Recent checks · ${h.length} observations${size > 1 ? " · grouped" : ""}`;
+    bars.replaceChildren();
+    for (let i = 0; i < observations.length; i += size) {
+      const group = observations.slice(i, i + size);
+      const failures = group.filter((p) => !p.gap && !p.ok).length;
+      const gap = group.some((p) => p.gap);
+      const status = failures ? "down" : gap ? "unknown" : "up";
+      const bar = el("span", undefined, "bar " + status);
+      bar.title = `${fmt(group[0].time)} – ${fmt(group[group.length - 1].time)} · ${group.filter((p) => !p.gap).length} checks · ${failures} failures${gap ? " · monitoring gap" : ""}`;
+      bars.append(bar);
+    }
+  };
   section.append(bars);
+  historyObserver.observe(bars);
   const times = el("div", undefined, "times");
   times.append(
     el("span", h.length ? fmt(h[0].time) : "No observations"),
@@ -99,6 +119,7 @@ function render() {
     const ns = "http://www.w3.org/2000/svg",
       svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 600 125");
+    svg.setAttribute("preserveAspectRatio", "none");
     svg.classList.add("chart");
     svg.setAttribute("role", "img");
     svg.setAttribute("aria-label", "Response time chart for recent checks");

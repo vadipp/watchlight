@@ -84,8 +84,9 @@ h1 {
 }
 .layout {
   display: grid;
-  grid-template-columns: 310px 1fr;
+  grid-template-columns: 260px minmax(0, 1fr);
   gap: 26px;
+  align-items: start;
 }
 aside,
 #detail {
@@ -157,14 +158,14 @@ button {
 }
 .bars {
   display: flex;
-  gap: 3px;
-  height: 35px;
+  gap: 4px;
+  height: 28px;
   margin: 12px 0 6px;
 }
 .bar {
   background: var(--green);
-  flex: 1;
-  min-width: 1px;
+  flex: 1 1 0;
+  min-width: 0;
   border-radius: 2px;
 }
 .bar.down {
@@ -176,8 +177,12 @@ button {
 .times {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   font-size: 11px;
   color: var(--muted);
+}
+.times span:last-child {
+  text-align: right;
 }
 .chart {
   display: block;
