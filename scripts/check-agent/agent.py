@@ -81,6 +81,19 @@ def probe(c):
         output = command(c["argv"], c.get("timeout", 25))
         if c.get("contains", "").encode() not in output:
             raise ValueError("expected output missing")
+    elif kind == "docker":
+        names = c["containers"]
+        if not names or any(not name or name.startswith("-") for name in names):
+            raise ValueError("invalid container names")
+        output = command(["docker", "inspect", "--format", "{{json .State}}", *names])
+        states = [json.loads(line) for line in output.decode().splitlines()]
+        if len(states) != len(names):
+            raise ValueError("missing containers")
+        for state in states:
+            if not state.get("Running") or state.get("Paused") or state.get("Restarting") or state.get("Dead"):
+                raise ValueError("container not running")
+            if "Health" in state and state["Health"].get("Status") != "healthy":
+                raise ValueError("container not healthy")
     elif kind == "http":
         output = request(c["url"], c.get("method", "GET"), c.get("headers"),
                          c.get("body", "").encode() if "body" in c else None, c.get("status", 200))

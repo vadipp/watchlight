@@ -62,6 +62,9 @@ const assert = require('node:assert/strict');
     }
     assert.equal(await page.locator('.service-group').count(), 0, 'owner groups leaked into public UI');
     assert.equal(await page.locator('.technical').count(), 0, 'technical panel exposed publicly');
+    assert.deepEqual(await page.locator('.chart-axis span').allTextContents(), ['10 ms','5 ms','0 ms']);
+    assert.match(await page.locator('.chart-range').textContent(), /1 ms – 7 ms/);
+    assert.equal(await page.locator('.chart-grid').count(), 3);
     await page.goto('http://watchlight.test/dashboard');
     await page.waitForSelector('.service-group');
     assert.equal(await page.locator('.service-group').count(), 4);
@@ -79,6 +82,17 @@ const assert = require('node:assert/strict');
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `owner overflow at ${width}`);
     }
     console.log('Owner groups: four groups, selection, expansion and responsive layout passed');
+    // A constant zero series must retain a finite, labelled scale.
+    history.forEach(p => { p.latency = 0; });
+    await page.goto('http://watchlight.test/');
+    await page.waitForSelector('.chart-axis');
+    assert.deepEqual(await page.locator('.chart-axis span').allTextContents(), ['1 ms','0.5 ms','0 ms']);
+    assert.equal(await page.locator('.chart-range').textContent(), 'Observed range: 0 ms – 0 ms');
+    // Sub-millisecond data must not round all scale labels to zero.
+    history.forEach(p => { p.latency = 0.025; });
+    await page.reload();
+    await page.waitForSelector('.chart-axis');
+    assert.deepEqual(await page.locator('.chart-axis span').allTextContents(), ['0.05 ms','0.025 ms','0 ms']);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

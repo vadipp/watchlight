@@ -11,6 +11,13 @@ const el = (tag, text, cls) => {
   return n;
 };
 const fmt = (t) => new Date(t * 1000).toLocaleString();
+const milliseconds = (value) => new Intl.NumberFormat(undefined, {
+  maximumSignificantDigits: 3,
+}).format(value) + " ms";
+function chartCeiling(value) {
+  const magnitude = 10 ** Math.floor(Math.log10(value || 1));
+  return [1, 2, 5, 10].find((step) => step * magnitude >= value) * magnitude;
+}
 const historyObserver = new ResizeObserver((entries) => {
   for (const { target, contentRect } of entries)
     target.drawBars(contentRect.width);
@@ -149,9 +156,27 @@ function render() {
     svg.setAttribute("preserveAspectRatio", "none");
     svg.classList.add("chart");
     svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Response time chart for recent checks");
+    const observedMax = Math.max(0, ...h.map((p) => p.latency));
+    const max = chartCeiling(observedMax);
+    const observedMin = Math.min(...h.map((p) => p.latency));
+    svg.setAttribute("aria-label", `Response time chart. Scale: 0 to ${milliseconds(max)}. Observed range: ${milliseconds(observedMin)} to ${milliseconds(observedMax)}.`);
+    const chart = el("div", undefined, "response-chart");
+    const axis = el("div", undefined, "chart-axis");
+    axis.setAttribute("aria-hidden", "true");
+    for (const value of [max, max / 2, 0]) axis.append(el("span", milliseconds(value)));
+    for (const y of [10, 65, 120]) {
+      const grid = document.createElementNS(ns, "line");
+      grid.setAttribute("x1", "0");
+      grid.setAttribute("x2", "600");
+      grid.setAttribute("y1", String(y));
+      grid.setAttribute("y2", String(y));
+      grid.classList.add("chart-grid");
+      svg.append(grid);
+    }
     const line = document.createElementNS(ns, "polyline"),
-      max = Math.max(1, ...h.map((p) => p.latency));
+      title = document.createElementNS(ns, "title");
+    title.textContent = `Observed response times: ${milliseconds(observedMin)} – ${milliseconds(observedMax)}`;
+    svg.append(title);
     line.setAttribute(
       "points",
       h
@@ -162,7 +187,8 @@ function render() {
         .join(" "),
     );
     svg.append(line);
-    section.append(svg);
+    chart.append(axis, svg);
+    section.append(chart, el("div", `Observed range: ${milliseconds(observedMin)} – ${milliseconds(observedMax)}`, "label chart-range"));
   }
   detail.append(section);
   if (privateView && v.state.error)

@@ -226,8 +226,36 @@ aside.grouped {
   display: block;
   width: 100%;
   height: 125px;
-  margin: 12px 0;
+  margin: 0;
 }
+.response-chart {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 18px;
+}
+.chart-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 130px;
+  line-height: 20px;
+  text-align: right;
+  min-width: 4.5em;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chart-axis span {
+  white-space: nowrap;
+}
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+.chart-range { margin-top: 6px; }
 svg polyline {
   stroke: var(--green);
   stroke-width: 2;

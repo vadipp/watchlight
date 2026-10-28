@@ -173,3 +173,7 @@ underlying probe. Descriptions and groups do not change check fingerprints.
 Technical configuration, type and polling interval are omitted from both public
 APIs; only the authenticated owner API includes the `check` object. Secret values
 and secret environment names are never included in that object.
+
+Response-time charts show a zero-based millisecond scale with labelled midpoint
+and upper bound, subtle grid lines, and the observed minimum–maximum range. The
+scale rounds up to a readable bound and retains precision below one millisecond.

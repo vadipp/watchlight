@@ -35,5 +35,17 @@ class AgentTests(unittest.TestCase):
     def test_timeout(self):
         import sys
         with self.assertRaises(Exception):agent.command([sys.executable,"-c","import time; time.sleep(3)"],0.05)
+    def test_docker_requires_every_container_running_and_healthy(self):
+        import json
+        healthy = {"Running":True,"Health":{"Status":"healthy"}}
+        for state in [{"Running":False},{"Running":True,"Paused":True},{"Running":True,"Restarting":True},{"Running":True,"Health":{"Status":"unhealthy"}},{"Running":True,"Health":{"Status":"starting"}}]:
+            output = '\n'.join(json.dumps(s) for s in [healthy,state]).encode()
+            with patch.object(agent,"command",return_value=output):
+                with self.assertRaises(ValueError):agent.probe({"kind":"docker","containers":["example-api","example-db"]})
+        with patch.object(agent,"command",return_value=json.dumps(healthy).encode()):
+            with self.assertRaises(ValueError):agent.probe({"kind":"docker","containers":["example-api","missing-worker"]})
+        output = '\n'.join(json.dumps(s) for s in [healthy,{"Running":True}]).encode()
+        with patch.object(agent,"command",return_value=output):
+            agent.probe({"kind":"docker","containers":["example-api","example-worker"]})
 
 if __name__ == '__main__': unittest.main()

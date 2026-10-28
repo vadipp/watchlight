@@ -34,7 +34,8 @@ runtime (five minutes is a reasonable starting point for a one-minute timer).
 Probe failures and delivery failures log only monitor IDs, never command output,
 URLs, exception details or credentials. IDs must be non-secret.
 
-Probe kinds: `http` (method, headers, optional body/status/contains), `command`
+Probe kinds: `docker` (all named containers running, not paused/restarting/dead,
+and healthy when a Docker health check exists), `http` (method, headers, optional body/status/contains), `command`
 (argv, optional timeout/contains), `timestamp` (ISO/Unix timestamp or JSON field
 with required result fields), `file_age` (mtime and marker text), `systemd`
 (successful recent completion in this boot), `certificate` (verified live TLS,
