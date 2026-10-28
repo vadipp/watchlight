@@ -32,6 +32,11 @@ Do not put secrets in YAML, command arguments, URLs or Git.
 - `http`: GET, exact expected status (default 200), optional `body_contains`
   within the first 1 MiB. Normal HTTPS certificate verification. Redirects follow
   Go's standard client behavior. Ten-second default deadline covers the request.
+  Set `record_latency: false` on HTTP monitors to discard new timings and hide
+  response time and its chart in owner and public views (default: true). Existing
+  history is retained but hidden while disabled. Uptime and incidents are unaffected.
+  Disabled timings use zero placeholders in storage and history responses;
+  `latency_ms` is null. This setting does not reset incident thresholds.
 - `tcp`: connect to `host:port` with a deadline; this verifies connectivity only.
 - `heartbeat`: authenticated incoming GET or POST; see `docs/heartbeats.md`.
 

@@ -81,6 +81,10 @@ func (s *Store) state(id string) State {
 	return v
 }
 func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bool) error {
+	// Preserve the existing schema without persisting disabled measurements.
+	if !m.recordsLatency() {
+		lat = 0
+	}
 	tx, e := s.Begin()
 	if e != nil {
 		return e

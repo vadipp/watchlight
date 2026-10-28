@@ -35,6 +35,7 @@ type View struct {
 
 // Explicit allowlist: credentials and secret environment names never belong here.
 type CheckInfo struct {
+	RecordLatency  *bool  `json:"record_latency,omitempty"`
 	Type           string `json:"type"`
 	Target         string `json:"target"`
 	Description    string `json:"description,omitempty"`
@@ -103,8 +104,14 @@ func handler(c Config, s *Store) http.Handler {
 					v := 100 * float64(up) / float64(total)
 					uptime = &v
 				}
+				if !m.recordsLatency() {
+					st.Latency = 0
+					for i := range h {
+						h[i].Latency = 0
+					}
+				}
 				view := View{ID: m.ID, Name: m.Name, State: st, History: h, Incidents: inc, Uptime: uptime, Samples: total}
-				if m.Type != "heartbeat" && st.Checked != 0 {
+				if m.recordsLatency() && st.Checked != 0 {
 					latency := st.Latency
 					view.LatencyMS = &latency
 				}
@@ -118,6 +125,8 @@ func handler(c Config, s *Store) http.Handler {
 					}
 					view.Check = &CheckInfo{Type: m.Type, Target: target, Description: m.Description, Interval: m.Interval, Timeout: m.Timeout, Failures: m.Failures, Successes: m.Successes}
 					if m.Type == "http" {
+						enabled := m.recordsLatency()
+						view.Check.RecordLatency = &enabled
 						view.Check.ExpectedStatus = m.ExpectedStatus
 						view.Check.BodyContains = m.BodyContains
 					}

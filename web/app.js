@@ -94,14 +94,7 @@ function render() {
       "Observed uptime · 24h",
       v.uptime === null ? "—" : v.uptime.toFixed(2) + "%",
     ],
-    [
-      "Response time",
-      v.latency_ms === null || v.type === "heartbeat"
-        ? "—"
-        : v.state.checked
-          ? v.state.latency.toFixed(0) + " ms"
-          : "—",
-    ],
+    ...(v.latency_ms !== null && v.type !== "heartbeat" ? [["Response time", milliseconds(v.latency_ms)]] : []),
     ["Current status", v.state.status],
   ]) {
     const m = el("div", undefined, "metric");
@@ -219,6 +212,7 @@ function render() {
       ["Type", c.type], ["Target", c.target], ["Description", c.description],
       ["Interval", c.interval], ["Timeout", c.timeout],
       ["Failure threshold", c.failures], ["Recovery threshold", c.successes],
+      ["Latency recording", c.type === "http" ? (c.record_latency === false ? "Disabled" : "Enabled") : null],
       ["Expected HTTP status", c.expected_status], ["Expected text", c.body_contains],
       ["Heartbeat freshness", c.max_age],
     ]) {

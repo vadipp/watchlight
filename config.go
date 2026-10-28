@@ -36,6 +36,7 @@ type Config struct {
 	Watchdog          *Watchdog    `yaml:"watchdog"`
 }
 type Monitor struct {
+	RecordLatency  *bool  `yaml:"record_latency" json:"-"`
 	Description    string `yaml:"description" json:"-"`
 	Group          string `yaml:"group" json:"-"`
 	ID             string `yaml:"id"`
@@ -144,6 +145,9 @@ func loadConfig(path string) (Config, error) {
 		}
 		if duration(m.Interval) < time.Second || duration(m.Timeout) <= 0 || duration(m.Timeout) > duration(m.Interval) || m.Failures < 1 || m.Successes < 1 {
 			return c, fmt.Errorf("%s: invalid timing or thresholds", m.ID)
+		}
+		if m.RecordLatency != nil && m.Type != "http" {
+			return c, fmt.Errorf("%s: record_latency is only supported for HTTP checks", m.ID)
 		}
 		switch m.Type {
 		case "http":
@@ -259,4 +263,8 @@ func fingerprint(m Monitor) string {
 	b, _ := json.Marshal(m)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+func (m Monitor) recordsLatency() bool {
+	return m.Type != "heartbeat" && (m.RecordLatency == nil || *m.RecordLatency)
 }
