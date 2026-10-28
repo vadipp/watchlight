@@ -49,12 +49,31 @@ CREATE TABLE IF NOT EXISTS incidents(id TEXT NOT NULL,status TEXT NOT NULL,time 
 CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY,body TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS hourly(id TEXT NOT NULL,hour INTEGER NOT NULL,total INTEGER NOT NULL,successes INTEGER NOT NULL,latency_sum REAL NOT NULL,latency_max REAL NOT NULL,PRIMARY KEY(id,hour));
 CREATE TABLE IF NOT EXISTS heartbeats(id TEXT PRIMARY KEY,time INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS heartbeat_reports(id TEXT PRIMARY KEY,time INTEGER NOT NULL,detail TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);`)
 	if e != nil {
 		db.Close()
 		return nil, e
 	}
 	return s, nil
+}
+
+// Commit arrival and optional failure detail together. Empty legacy heartbeats
+// clear older reports so a recovered sender cannot inherit a stale failure.
+func (s *Store) heartbeat(id, detail string) error {
+	tx, err := s.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err = tx.Exec("INSERT INTO heartbeats VALUES(?,?) ON CONFLICT(id) DO UPDATE SET time=excluded.time", id, now); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("INSERT INTO heartbeat_reports VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET time=excluded.time,detail=excluded.detail", id, now, detail); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (s *Store) state(id string) State {
 	v := State{ID: id, Status: "unknown"}

@@ -48,4 +48,33 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent,"command",return_value=output):
             agent.probe({"kind":"docker","containers":["example-api","example-worker"]})
 
+class ComposeTests(unittest.TestCase):
+    def test_missing_service_and_all_replicas(self):
+        import json
+        def row(name, service, state):
+            return (json.dumps(name)+" "+json.dumps(service)+" "+json.dumps(state)+"\n").encode()
+        rows = row("/example-api-1", "api", {"Running":True}) + row("/example-api-2", "api", {"Running":False,"Status":"exited"})
+        with patch.object(agent,"command",side_effect=[b"a\nb\n",rows]):
+            with self.assertRaises(agent.ContainerFailure) as raised:
+                agent.probe({"kind":"compose","project":"example","services":["api","worker"]})
+        self.assertEqual(raised.exception.failures,[{"name":"example-api-2","status":"exited"},{"name":"worker","status":"missing"}])
+    def test_recreated_container_and_excluded_job(self):
+        import json
+        rows = b'"/example-api-new" "api" '+json.dumps({"Running":True}).encode()+b'\n"/example-job-1" "job" '+json.dumps({"Running":False}).encode()
+        with patch.object(agent,"command",side_effect=[b"a\nb",rows]):
+            agent.probe({"kind":"compose","project":"example","services":["api"]})
+        with patch.object(agent,"command",return_value=b""):
+            with self.assertRaises(agent.ContainerFailure):
+                agent.probe({"kind":"compose","project":"example","services":["api"]})
+    def test_structured_failure_report_and_dry_run(self):
+        import json
+        c={"id":"fixture","token":"private"}
+        failure=agent.ContainerFailure([{"name":"example-db","status":"unhealthy"}])
+        with patch.object(agent,"probe",side_effect=failure),patch.object(agent,"request") as post:
+            self.assertFalse(agent.run_one(c,"https://example.com",False))
+            self.assertEqual(json.loads(post.call_args.kwargs["body"]),{"failures":failure.failures})
+            self.assertNotIn("private",post.call_args.args[0])
+        with patch.object(agent,"probe",side_effect=failure),patch.object(agent,"request") as post:
+            self.assertFalse(agent.run_one(c,"https://example.com",True));post.assert_not_called()
+
 if __name__ == '__main__': unittest.main()

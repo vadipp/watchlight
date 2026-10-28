@@ -76,3 +76,25 @@ updating both ends and restarting Watchlight; do not reuse owner credentials.
 
 REST command method, header and action syntax follow the official
 [Home Assistant RESTful Command documentation](https://www.home-assistant.io/integrations/rest_command/).
+
+## Container failure reports
+
+A collector may POST a bounded JSON body to the same authenticated endpoint:
+
+```json
+{"failures":[{"name":"example-worker-1","status":"unhealthy"}]}
+```
+
+A fresh failure report makes the heartbeat check fail at its next scheduled
+assessment, using the configured consecutive failure/recovery thresholds.
+HTTP 204 acknowledges storage, including storage of a failure report; it does
+not imply that the reported service is healthy. Empty legacy heartbeats or
+`{"failures":[]}` clear previous failure details. If reports stop arriving,
+`max_age` still applies. Details persist across restarts and appear only in the
+owner API/dashboard, never public APIs or Telegram message bodies.
+
+The body is limited to 8 KiB and 64 failures. Names accept only container/service
+identity characters, up to 128 characters. States are restricted to missing,
+exited, paused, restarting, dead, created, removing, unhealthy, starting and
+not-running. Unknown fields, arbitrary diagnostics and malformed reports are
+rejected without refreshing the heartbeat. Send names that contain no secrets.

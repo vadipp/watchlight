@@ -5,9 +5,12 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html"
+	"io"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -168,7 +171,12 @@ func handler(c Config, s *Store) http.Handler {
 				http.Error(w, "Unauthorized", 401)
 				return
 			}
-			if _, e := s.Exec("INSERT INTO heartbeats VALUES(?,?) ON CONFLICT(id) DO UPDATE SET time=excluded.time", m.ID, time.Now().Unix()); e != nil {
+			detail, err := heartbeatDetail(w, r)
+			if err != nil {
+				http.Error(w, "Invalid heartbeat report", 400)
+				return
+			}
+			if e := s.heartbeat(m.ID, detail); e != nil {
 				http.Error(w, "Storage unavailable", 503)
 				return
 			}
@@ -231,6 +239,48 @@ func handler(c Config, s *Store) http.Handler {
 		mux.ServeHTTP(w, r)
 	})
 }
+
+// Only structured container identities and enumerated states are accepted.
+// Raw command output, Docker errors and arbitrary diagnostic text are excluded.
+func heartbeatDetail(w http.ResponseWriter, r *http.Request) (string, error) {
+	var report struct {
+		Failures []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"failures"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&report)
+	if err == io.EOF {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if r.Method != http.MethodPost || len(report.Failures) > 64 {
+		return "", fmt.Errorf("invalid report")
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return "", fmt.Errorf("trailing data")
+	}
+	parts := []string{}
+	for _, failure := range report.Failures {
+		if !containerIdentity.MatchString(failure.Name) {
+			return "", fmt.Errorf("invalid identity")
+		}
+		switch failure.Status {
+		case "missing", "exited", "paused", "restarting", "dead", "created", "removing", "unhealthy", "starting", "not-running":
+		default:
+			return "", fmt.Errorf("invalid state")
+		}
+		parts = append(parts, failure.Name+": "+failure.Status)
+	}
+	return strings.Join(parts, "; "), nil
+}
+
+var containerIdentity = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)

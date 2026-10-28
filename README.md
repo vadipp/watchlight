@@ -164,6 +164,8 @@ counts. Ungrouped monitors appear under Other. Group names are omitted from publ
 APIs and status pages; grouping changes preserve existing check history and incident
 thresholds. See `scripts/check-agent/README.md` for optional local probes that
 report backup, certificate, telemetry or protocol health through private heartbeats.
+The agent also supports one aggregate per Compose project, checking all required
+services and reporting failed container identities only to the owner dashboard.
 
 Within each owner group, down services appear before other services while their
 relative configuration order is preserved. The bottom of the selected service's

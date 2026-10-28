@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run bounded local probes; send a private heartbeat only after each success.
+"""Run bounded local probes and report private heartbeat/container evidence.
 
 Configuration/tokens belong in a root-only JSON file, never in the source tree.
 Probe stdout/stderr and exception details are intentionally never logged.
@@ -9,6 +9,7 @@ import datetime
 import json
 import math
 import os
+import re
 import signal
 import ssl
 import socket
@@ -26,6 +27,63 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+class ContainerFailure(ValueError):
+    def __init__(self, failures):
+        super().__init__("container probe failed")
+        self.failures = failures
+
+
+def container_status(state):
+    for flag, status in [("Paused", "paused"), ("Restarting", "restarting"), ("Dead", "dead")]:
+        if state.get(flag):
+            return status
+    if not state.get("Running"):
+        status = state.get("Status", "not-running")
+        return status if status in ("exited", "created", "removing") else "not-running"
+    if "Health" in state and state["Health"].get("Status") != "healthy":
+        return "starting" if state["Health"].get("Status") == "starting" else "unhealthy"
+    return None
+
+
+def compose_probe(c):
+    project, services = c["project"], c["services"]
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", project) or not services or any(
+            not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", service) for service in services):
+        raise ValueError("invalid compose membership")
+    # Include stopped containers. Query only identity, membership and state;
+    # never read Docker environment values or authentication-bearing labels.
+    output = command(["docker", "ps", "-a", "--filter", "label=com.docker.compose.project=" + project,
+                      "--format", "{{.ID}}"])
+    ids = output.decode().split()
+    rows = []
+    if ids:
+        if len(ids) > 256:
+            raise ValueError("too many containers")
+        output = command(["docker", "inspect", "--format",
+                          '{{json .Name}} {{json (index .Config.Labels "com.docker.compose.service")}} {{json .State}}', *ids])
+        decoder = json.JSONDecoder()
+        for line in output.decode().splitlines():
+            row = []
+            for _ in range(3):
+                value, end = decoder.raw_decode(line.lstrip())
+                row.append(value)
+                line = line.lstrip()[end:]
+            rows.append(row)
+    failures = []
+    for service in services:
+        members = [(name.lstrip("/"), state) for name, member, state in rows if member == service]
+        if not members:
+            failures.append({"name": service, "status": "missing"})
+        for name, state in members:
+            status = container_status(state)
+            if status:
+                failures.append({"name": name, "status": status})
+    if failures:
+        if len(failures) > 64:
+            raise ValueError("too many failures")
+        raise ContainerFailure(failures)
 
 
 def request(url, method="GET", headers=None, body=None, status=200):
@@ -89,11 +147,11 @@ def probe(c):
         states = [json.loads(line) for line in output.decode().splitlines()]
         if len(states) != len(names):
             raise ValueError("missing containers")
-        for state in states:
-            if not state.get("Running") or state.get("Paused") or state.get("Restarting") or state.get("Dead"):
-                raise ValueError("container not running")
-            if "Health" in state and state["Health"].get("Status") != "healthy":
-                raise ValueError("container not healthy")
+        failures = [{"name": name, "status": container_status(state)} for name, state in zip(names, states) if container_status(state)]
+        if failures:
+            raise ContainerFailure(failures)
+    elif kind == "compose":
+        compose_probe(c)
     elif kind == "http":
         output = request(c["url"], c.get("method", "GET"), c.get("headers"),
                          c.get("body", "").encode() if "body" in c else None, c.get("status", 200))
@@ -156,6 +214,16 @@ def run_one(c, base, dry_run):
                     method="POST", headers={"Authorization": "Bearer " + c["token"]}, status=204)
         print(c["id"] + ": ok", flush=True)
         return True
+    except ContainerFailure as error:
+        if not dry_run:
+            try:
+                request(base + "/api/heartbeat/" + urllib.parse.quote(c["id"], safe=""),
+                        method="POST", headers={"Authorization": "Bearer " + c["token"], "Content-Type": "application/json"},
+                        body=json.dumps({"failures": error.failures}).encode(), status=204)
+            except Exception:
+                pass
+        print(c["id"] + ": failed", flush=True)
+        return False
     except Exception:
         print(c["id"] + ": failed", flush=True)
         return False

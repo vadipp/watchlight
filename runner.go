@@ -20,9 +20,18 @@ func check(ctx context.Context, m Monitor, s *Store) (bool, float64, string) {
 	switch m.Type {
 	case "heartbeat":
 		var last int64
-		s.QueryRow("SELECT time FROM heartbeats WHERE id=?", m.ID).Scan(&last)
+		var detail string
+		if err := s.QueryRow("SELECT h.time,coalesce(r.detail,'') FROM heartbeats h LEFT JOIN heartbeat_reports r ON r.id=h.id AND r.time=h.time WHERE h.id=?", m.ID).Scan(&last, &detail); err != nil {
+			return false, 0, "heartbeat unavailable"
+		}
 		if last == 0 || time.Since(time.Unix(last, 0)) > duration(m.MaxAge) {
+			if detail != "" {
+				return false, 0, "heartbeat overdue; last report: " + detail
+			}
 			return false, 0, "heartbeat overdue"
+		}
+		if detail != "" {
+			return false, 0, detail
 		}
 		return true, 0, ""
 	case "tcp":
