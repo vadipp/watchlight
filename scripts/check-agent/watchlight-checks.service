@@ -1,0 +1,17 @@
+[Unit]
+Description=Watchlight local health checks
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/watchlight-checks/agent.py /etc/watchlight-checks/config.json
+TimeoutStartSec=180
+Nice=10
+CPUQuota=25%
+MemoryMax=128M
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/watchlight-checks
+NoNewPrivileges=true

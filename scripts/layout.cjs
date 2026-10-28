@@ -21,9 +21,13 @@ const assert = require('node:assert/strict');
     };
     await page.route('http://watchlight.test/**', route => {
       const url = new URL(route.request().url());
+      if (url.pathname === '/api/health') return route.fulfill({json:{ok:true,pending_notifications:0}});
+      if (url.pathname === '/api/private') return route.fulfill({json:
+        ['Operations','Websites','Services','Public'].flatMap((group,g) => Array.from({length: g === 0 ? 36 : 3}, (_,i) => ({...monitor, id:`${g}-${i}`,name:`${group} service ${i}`,group})))
+      });
       if (url.pathname === '/api/public')
         return route.fulfill({ json: [monitor] });
-      const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+      const file = ['/', '/dashboard'].includes(url.pathname) ? 'index.html' : url.pathname.slice(1);
       return route.fulfill({
         body: fs.readFileSync(path.join(__dirname, '../web', file)),
         contentType: file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'text/javascript' : 'text/html',
@@ -56,6 +60,22 @@ const assert = require('node:assert/strict');
       assert.equal(result.aspect, 'none');
       console.log(`${width}px: ${result.count} blocks, minimum width ${result.min.toFixed(1)}px`);
     }
+    assert.equal(await page.locator('.service-group').count(), 0, 'owner groups leaked into public UI');
+    await page.goto('http://watchlight.test/dashboard');
+    await page.waitForSelector('.service-group');
+    assert.equal(await page.locator('.service-group').count(), 4);
+    assert.equal(await page.locator('.service-group[open]').count(), 1);
+    const websiteGroup = page.locator('.service-group').nth(1);
+    await websiteGroup.locator('summary').click();
+    await websiteGroup.locator('.service').first().click();
+    assert.match(await page.locator('#detail h2').first().textContent(), /Websites/);
+    assert(await page.locator('.service-group').nth(1).getAttribute('open') !== null, 'group collapsed on selection');
+    for (const width of [2048, 900, 390, 320]) {
+      await page.setViewportSize({width,height:1200});
+      await page.waitForTimeout(100);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `owner overflow at ${width}`);
+    }
+    console.log('Owner groups: four groups, selection, expansion and responsive layout passed');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

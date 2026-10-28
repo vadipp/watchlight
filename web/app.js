@@ -3,6 +3,7 @@ const privateView = location.pathname === "/dashboard";
 const statusSlug = location.pathname.startsWith("/status/") ? location.pathname.slice(8) : null;
 let selected = null,
   views = [];
+const expandedGroups = new Map();
 const el = (tag, text, cls) => {
   const n = document.createElement(tag);
   if (text !== undefined) n.textContent = text;
@@ -19,6 +20,27 @@ function render() {
   const list = document.querySelector("#services");
   list.replaceChildren();
   if (!views.some((v) => v.id === selected)) selected = views[0]?.id;
+  const groups = new Map();
+  if (privateView) {
+    for (const v of views) {
+      const name = v.group || "Other";
+      if (!groups.has(name)) {
+        const group = el("details", undefined, "service-group");
+        group.open = expandedGroups.get(name) ?? views.find((v) => v.id === selected)?.group === v.group;
+        const summary = el("summary");
+        const members = views.filter((v) => (v.group || "Other") === name);
+        const down = members.filter((v) => v.state.status === "down").length;
+        const unknown = members.filter((v) => v.state.status === "unknown").length;
+        summary.append(el("span", name), el("small", `${members.length}${down ? ` · ${down} down` : unknown ? ` · ${unknown} pending` : " · all up"}`, down ? "error" : ""));
+        group.append(summary);
+        group.addEventListener("toggle", () => {
+          if (group.isConnected) expandedGroups.set(name, group.open);
+        });
+        groups.set(name, group);
+        list.append(group);
+      }
+    }
+  }
   for (const v of views) {
     const b = el(
       "button",
@@ -34,7 +56,7 @@ function render() {
       selected = v.id;
       render();
     };
-    list.append(b);
+    (privateView ? groups.get(v.group || "Other") : list).append(b);
   }
   const sum = document.querySelector("#summary");
   const down = views.filter((v) => v.state.status === "down").length,
@@ -195,6 +217,9 @@ async function refresh() {
       "Connection lost · displayed details may be stale";
   }
 }
-if (privateView) document.querySelector("h1").textContent = "Owner dashboard";
+if (privateView) {
+  document.querySelector("h1").textContent = "Owner dashboard";
+  document.querySelector("aside").classList.add("grouped");
+}
 refresh();
 setInterval(refresh, 15000);

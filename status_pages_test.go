@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -84,5 +85,42 @@ func TestPublishingDoesNotRetriggerDownAlert(t *testing.T) {
 	}
 	if n != 1 || s.state(m.ID).Status != "down" {
 		t.Fatal("publishing changed check state or repeated alert")
+	}
+}
+
+func TestOwnerGroupsStayPrivateAndPreserveFingerprint(t *testing.T) {
+	s := testStore(t)
+	m := testMonitor()
+	old := fingerprint(m)
+	m.Group = "Operations"
+	m.Public = true
+	if fingerprint(m) != old {
+		t.Fatal("group or visibility changed check identity")
+	}
+	c := Config{OwnerUser: "owner", OwnerPasswordEnv: "GROUP_TEST_PASSWORD", Monitors: []Monitor{m}}
+	t.Setenv("GROUP_TEST_PASSWORD", "test-password-long-enough")
+	h := handler(c, s)
+	for _, private := range []bool{false, true} {
+		path := "/api/public"
+		if private {
+			path = "/api/private"
+		}
+		req := httptest.NewRequest("GET", path, nil)
+		if private {
+			req.SetBasicAuth("owner", "test-password-long-enough")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatal(rec.Code)
+		}
+		var data []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+			t.Fatal(err)
+		}
+		_, hasGroup := data[0]["group"]
+		if hasGroup != private {
+			t.Fatalf("private=%v response=%s", private, rec.Body.String())
+		}
 	}
 }

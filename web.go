@@ -16,6 +16,7 @@ import (
 var assets embed.FS
 
 type View struct {
+	Group           string     `json:"group,omitempty"`
 	IntervalSeconds float64    `json:"interval_seconds"`
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
@@ -83,7 +84,11 @@ func handler(c Config, s *Store) http.Handler {
 					v := 100 * float64(up) / float64(total)
 					uptime = &v
 				}
-				views = append(views, View{duration(m.Interval).Seconds(), m.ID, m.Name, m.Type, st, h, inc, uptime, total})
+				group := ""
+				if private {
+					group = m.Group
+				}
+				views = append(views, View{group, duration(m.Interval).Seconds(), m.ID, m.Name, m.Type, st, h, inc, uptime, total})
 			}
 			if page != nil {
 				writeJSON(w, struct {

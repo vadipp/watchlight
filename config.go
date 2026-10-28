@@ -36,6 +36,7 @@ type Config struct {
 	Watchdog          *Watchdog    `yaml:"watchdog"`
 }
 type Monitor struct {
+	Group          string `yaml:"group" json:"-"`
 	ID             string `yaml:"id"`
 	Name           string `yaml:"name"`
 	Type           string `yaml:"type"`
@@ -114,6 +115,10 @@ func loadConfig(path string) (Config, error) {
 	seen := map[string]bool{}
 	for i := range c.Monitors {
 		m := &c.Monitors[i]
+		m.Group = strings.TrimSpace(m.Group)
+		if len(m.Group) > 64 {
+			return c, errors.New("monitor group must be at most 64 bytes")
+		}
 		if !monitorID.MatchString(m.ID) || seen[m.ID] {
 			return c, errors.New("monitor IDs must be unique, 1..64 letters/digits/underscores/hyphens, starting with a letter or digit")
 		}
@@ -249,6 +254,7 @@ func secret(name string) (string, error) {
 func fingerprint(m Monitor) string {
 	// Visibility does not affect check semantics or incident thresholds.
 	m.Public = false
+	m.Group = ""
 	b, _ := json.Marshal(m)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])

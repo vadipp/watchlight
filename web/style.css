@@ -137,6 +137,44 @@ button {
   color: var(--muted);
   margin-left: auto;
 }
+.service-group + .service-group {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.service-group summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-weight: 650;
+}
+.service-group summary small {
+  display: block;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 16px;
+}
+.service-group summary small.error {
+  color: var(--red);
+}
+.service-group .service {
+  font-size: 13px;
+  padding: 12px 8px;
+}
+aside.grouped {
+  max-height: min(720px, 80vh);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+@media (min-width: 751px) {
+  aside.grouped {
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - 48px);
+  }
+}
+.service > span:nth-child(2) {
+  overflow-wrap: anywhere;
+}
 .metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

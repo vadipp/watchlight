@@ -155,3 +155,12 @@ status_pages:
 This serves `/status/overview` and its scoped JSON at `/api/status/overview`.
 Unknown pages return 404. Without a default page, `/` retains the original public
 view. `/api/public` retains the aggregate list of public monitors for compatibility.
+
+## Owner dashboard groups
+
+Set an optional `group` on each monitor to organize the authenticated dashboard.
+Groups appear in configuration order, with collapsible service lists and status
+counts. Ungrouped monitors appear under Other. Group names are omitted from public
+APIs and status pages; grouping changes preserve existing check history and incident
+thresholds. See `scripts/check-agent/README.md` for optional local probes that
+report backup, certificate, telemetry or protocol health through private heartbeats.
