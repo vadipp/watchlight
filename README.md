@@ -37,6 +37,10 @@ Do not put secrets in YAML, command arguments, URLs or Git.
   history is retained but hidden while disabled. Uptime and incidents are unaffected.
   Disabled timings use zero placeholders in storage and history responses;
   `latency_ms` is null. This setting does not reset incident thresholds.
+  Set `disable_keep_alive: true` to open a fresh connection for every HTTP check,
+  including redirects. This avoids retries on stale pooled connections, but adds
+  TCP/TLS connection setup to each measurement. Connection reuse is enabled by
+  default. Changing this option preserves incident thresholds and history.
 - `tcp`: connect to `host:port` with a deadline; this verifies connectivity only.
 - `heartbeat`: authenticated incoming GET or POST; see `docs/heartbeats.md`.
 

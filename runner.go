@@ -12,6 +12,13 @@ import (
 	"time"
 )
 
+// A separate transport prevents opted-out monitors from borrowing pooled connections.
+var freshConnectionClient = func() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	return &http.Client{Transport: transport}
+}()
+
 func check(ctx context.Context, m Monitor, s *Store) (bool, float64, string) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, duration(m.Timeout))
@@ -45,7 +52,11 @@ func check(ctx context.Context, m Monitor, s *Store) (bool, float64, string) {
 		req, e = http.NewRequestWithContext(ctx, "GET", m.Target, nil)
 		if e == nil {
 			var r *http.Response
-			r, e = http.DefaultClient.Do(req)
+			client := http.DefaultClient
+			if m.DisableKeepAlive {
+				client = freshConnectionClient
+			}
+			r, e = client.Do(req)
 			if e == nil {
 				defer r.Body.Close()
 				if r.StatusCode != m.ExpectedStatus {

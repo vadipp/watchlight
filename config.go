@@ -36,22 +36,23 @@ type Config struct {
 	Watchdog          *Watchdog    `yaml:"watchdog"`
 }
 type Monitor struct {
-	RecordLatency  *bool  `yaml:"record_latency" json:"-"`
-	Description    string `yaml:"description" json:"-"`
-	Group          string `yaml:"group" json:"-"`
-	ID             string `yaml:"id"`
-	Name           string `yaml:"name"`
-	Type           string `yaml:"type"`
-	Target         string `yaml:"target"`
-	Public         bool   `yaml:"public"`
-	Interval       string `yaml:"interval"`
-	Timeout        string `yaml:"timeout"`
-	Failures       int    `yaml:"failures"`
-	Successes      int    `yaml:"successes"`
-	ExpectedStatus int    `yaml:"expected_status"`
-	BodyContains   string `yaml:"body_contains"`
-	TokenEnv       string `yaml:"token_env"`
-	MaxAge         string `yaml:"max_age"`
+	DisableKeepAlive bool   `yaml:"disable_keep_alive" json:"-"`
+	RecordLatency    *bool  `yaml:"record_latency" json:"-"`
+	Description      string `yaml:"description" json:"-"`
+	Group            string `yaml:"group" json:"-"`
+	ID               string `yaml:"id"`
+	Name             string `yaml:"name"`
+	Type             string `yaml:"type"`
+	Target           string `yaml:"target"`
+	Public           bool   `yaml:"public"`
+	Interval         string `yaml:"interval"`
+	Timeout          string `yaml:"timeout"`
+	Failures         int    `yaml:"failures"`
+	Successes        int    `yaml:"successes"`
+	ExpectedStatus   int    `yaml:"expected_status"`
+	BodyContains     string `yaml:"body_contains"`
+	TokenEnv         string `yaml:"token_env"`
+	MaxAge           string `yaml:"max_age"`
 }
 type Telegram struct {
 	RelayAddress string `yaml:"relay_address"`
@@ -145,6 +146,9 @@ func loadConfig(path string) (Config, error) {
 		}
 		if duration(m.Interval) < time.Second || duration(m.Timeout) <= 0 || duration(m.Timeout) > duration(m.Interval) || m.Failures < 1 || m.Successes < 1 {
 			return c, fmt.Errorf("%s: invalid timing or thresholds", m.ID)
+		}
+		if m.DisableKeepAlive && m.Type != "http" {
+			return c, fmt.Errorf("%s: disable_keep_alive is only supported for HTTP checks", m.ID)
 		}
 		if m.RecordLatency != nil && m.Type != "http" {
 			return c, fmt.Errorf("%s: record_latency is only supported for HTTP checks", m.ID)

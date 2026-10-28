@@ -35,17 +35,18 @@ type View struct {
 
 // Explicit allowlist: credentials and secret environment names never belong here.
 type CheckInfo struct {
-	RecordLatency  *bool  `json:"record_latency,omitempty"`
-	Type           string `json:"type"`
-	Target         string `json:"target"`
-	Description    string `json:"description,omitempty"`
-	Interval       string `json:"interval"`
-	Timeout        string `json:"timeout"`
-	Failures       int    `json:"failures"`
-	Successes      int    `json:"successes"`
-	ExpectedStatus int    `json:"expected_status,omitempty"`
-	BodyContains   string `json:"body_contains,omitempty"`
-	MaxAge         string `json:"max_age,omitempty"`
+	DisableKeepAlive bool   `json:"disable_keep_alive,omitempty"`
+	RecordLatency    *bool  `json:"record_latency,omitempty"`
+	Type             string `json:"type"`
+	Target           string `json:"target"`
+	Description      string `json:"description,omitempty"`
+	Interval         string `json:"interval"`
+	Timeout          string `json:"timeout"`
+	Failures         int    `json:"failures"`
+	Successes        int    `json:"successes"`
+	ExpectedStatus   int    `json:"expected_status,omitempty"`
+	BodyContains     string `json:"body_contains,omitempty"`
+	MaxAge           string `json:"max_age,omitempty"`
 }
 
 func equal(a, b string) bool {
@@ -127,6 +128,7 @@ func handler(c Config, s *Store) http.Handler {
 					if m.Type == "http" {
 						enabled := m.recordsLatency()
 						view.Check.RecordLatency = &enabled
+						view.Check.DisableKeepAlive = m.DisableKeepAlive
 						view.Check.ExpectedStatus = m.ExpectedStatus
 						view.Check.BodyContains = m.BodyContains
 					}

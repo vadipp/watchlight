@@ -212,6 +212,7 @@ function render() {
       ["Type", c.type], ["Target", c.target], ["Description", c.description],
       ["Interval", c.interval], ["Timeout", c.timeout],
       ["Failure threshold", c.failures], ["Recovery threshold", c.successes],
+      ["Connection reuse", c.type === "http" ? (c.disable_keep_alive ? "Disabled" : "Enabled") : null],
       ["Latency recording", c.type === "http" ? (c.record_latency === false ? "Disabled" : "Enabled") : null],
       ["Expected HTTP status", c.expected_status], ["Expected text", c.body_contains],
       ["Heartbeat freshness", c.max_age],
