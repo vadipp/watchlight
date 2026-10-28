@@ -23,7 +23,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const config = path.join(dir, "config.yaml");
     fs.writeFileSync(
       config,
-      `listen: 127.0.0.1:${port}\ndatabase: ${dir}/monitor.db\nowner_user: owner\nowner_password_env: SMOKE_PASSWORD\nmonitors:\n  - id: web\n    name: Public website\n    type: http\n    target: http://127.0.0.1:${target}\n    public: true\n    interval: 1s\n    timeout: 1s\n    failures: 2\n  - id: ha\n    name: Private Home Assistant\n    type: heartbeat\n    token_env: SMOKE_TOKEN\n    interval: 1s\n    timeout: 1s\n    max_age: 2s\n    failures: 2\n`,
+      `listen: 127.0.0.1:${port}\ndatabase: ${dir}/monitor.db\nowner_user: owner\nowner_password_env: SMOKE_PASSWORD\ndefault_status_page: overview\nstatus_pages:\n  - slug: overview\n    name: Service overview\n    monitors: [web]\nmonitors:\n  - id: web\n    name: Public website\n    type: http\n    target: http://127.0.0.1:${target}\n    public: true\n    interval: 1s\n    timeout: 1s\n    failures: 2\n  - id: ha\n    name: Private Home Assistant\n    type: heartbeat\n    token_env: SMOKE_TOKEN\n    interval: 1s\n    timeout: 1s\n    max_age: 2s\n    failures: 2\n`,
       { mode: 0o600 },
     );
     proc = spawn(path.resolve("watchlight"), ["serve", "-config", config], {
@@ -103,6 +103,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const page = await context.newPage();
       page.on("pageerror", (e) => errors.push(e.message));
       await page.goto(base);
+      assert(new URL(page.url()).pathname === "/status/overview", "default redirect failed");
+      assert((await page.locator("h1").textContent()) === "Service overview", "named page heading failed");
       await page.waitForFunction(
         () => document.querySelectorAll(".service").length === 1,
       );

@@ -1,5 +1,6 @@
 "use strict";
 const privateView = location.pathname === "/dashboard";
+const statusSlug = location.pathname.startsWith("/status/") ? location.pathname.slice(8) : null;
 let selected = null,
   views = [];
 const el = (tag, text, cls) => {
@@ -138,11 +139,12 @@ function render() {
 }
 async function refresh() {
   try {
-    const r = await fetch(privateView ? "/api/private" : "/api/public", {
+    const r = await fetch(privateView ? "/api/private" : statusSlug ? "/api/status/" + encodeURIComponent(statusSlug) : "/api/public", {
       cache: "no-store",
     });
     if (!r.ok) throw Error();
-    views = await r.json();
+    const data = await r.json();
+    views = statusSlug ? data.monitors : data;
     if (privateView) {
       const healthResponse = await fetch("/api/health", { cache: "no-store" });
       const health = await healthResponse.json();

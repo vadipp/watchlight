@@ -18,15 +18,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type StatusPage struct {
+	Slug     string   `yaml:"slug"`
+	Name     string   `yaml:"name"`
+	Monitors []string `yaml:"monitors"`
+}
 type Config struct {
-	Listen           string    `yaml:"listen"`
-	Database         string    `yaml:"database"`
-	OwnerUser        string    `yaml:"owner_user"`
-	OwnerPasswordEnv string    `yaml:"owner_password_env"`
-	RetentionDays    int       `yaml:"retention_days"`
-	Monitors         []Monitor `yaml:"monitors"`
-	Telegram         Telegram  `yaml:"telegram"`
-	Watchdog         *Watchdog `yaml:"watchdog"`
+	StatusPages       []StatusPage `yaml:"status_pages"`
+	DefaultStatusPage string       `yaml:"default_status_page"`
+	Listen            string       `yaml:"listen"`
+	Database          string       `yaml:"database"`
+	OwnerUser         string       `yaml:"owner_user"`
+	OwnerPasswordEnv  string       `yaml:"owner_password_env"`
+	RetentionDays     int          `yaml:"retention_days"`
+	Monitors          []Monitor    `yaml:"monitors"`
+	Telegram          Telegram     `yaml:"telegram"`
+	Watchdog          *Watchdog    `yaml:"watchdog"`
 }
 type Monitor struct {
 	ID             string `yaml:"id"`
@@ -157,6 +164,28 @@ func loadConfig(path string) (Config, error) {
 			return c, fmt.Errorf("%s: unsupported type", m.ID)
 		}
 	}
+	pages := map[string]bool{}
+	for _, p := range c.StatusPages {
+		if !monitorID.MatchString(p.Slug) || pages[p.Slug] || strings.TrimSpace(p.Name) == "" {
+			return c, errors.New("status pages require unique valid slugs and nonempty names")
+		}
+		pages[p.Slug] = true
+		members := map[string]bool{}
+		for _, id := range p.Monitors {
+			if !seen[id] || members[id] {
+				return c, fmt.Errorf("status page %s: unknown or duplicate monitor %s", p.Slug, id)
+			}
+			members[id] = true
+			for _, m := range c.Monitors {
+				if m.ID == id && !m.Public {
+					return c, fmt.Errorf("status page %s: monitor %s must be public", p.Slug, id)
+				}
+			}
+		}
+	}
+	if c.DefaultStatusPage != "" && !pages[c.DefaultStatusPage] {
+		return c, errors.New("default_status_page must reference a configured page")
+	}
 	if c.Telegram.RelayAddress != "" {
 		if _, _, e := net.SplitHostPort(c.Telegram.RelayAddress); e != nil {
 			return c, errors.New("invalid Telegram relay_address")
@@ -207,6 +236,8 @@ func secret(name string) (string, error) {
 	return v, nil
 }
 func fingerprint(m Monitor) string {
+	// Visibility does not affect check semantics or incident thresholds.
+	m.Public = false
 	b, _ := json.Marshal(m)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])

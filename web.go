@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"html"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -45,11 +46,17 @@ func handler(c Config, s *Store) http.Handler {
 			next(w, r)
 		}
 	}
-	snapshot := func(private bool) http.HandlerFunc {
+	snapshot := func(private bool, page *StatusPage) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			views := []View{}
+			members := map[string]bool{}
+			if page != nil {
+				for _, id := range page.Monitors {
+					members[id] = true
+				}
+			}
 			for _, m := range c.Monitors {
-				if !private && !m.Public {
+				if !private && (!m.Public || (page != nil && !members[m.ID])) {
 					continue
 				}
 				st := s.state(m.ID)
@@ -78,11 +85,19 @@ func handler(c Config, s *Store) http.Handler {
 				}
 				views = append(views, View{duration(m.Interval).Seconds(), m.ID, m.Name, m.Type, st, h, inc, uptime, total})
 			}
-			writeJSON(w, views)
+			if page != nil {
+				writeJSON(w, struct {
+					Slug     string `json:"slug"`
+					Name     string `json:"name"`
+					Monitors []View `json:"monitors"`
+				}{page.Slug, page.Name, views})
+			} else {
+				writeJSON(w, views)
+			}
 		}
 	}
-	mux.HandleFunc("GET /api/public", snapshot(false))
-	mux.HandleFunc("GET /api/private", auth(snapshot(true)))
+	mux.HandleFunc("GET /api/public", snapshot(false, nil))
+	mux.HandleFunc("GET /api/private", auth(snapshot(true, nil)))
 	mux.HandleFunc("GET /api/health", auth(func(w http.ResponseWriter, r *http.Request) {
 		h := Health{OK: true, Checked: time.Now().Unix()}
 		if c.Telegram.TokenEnv != "" {
@@ -126,6 +141,41 @@ func handler(c Config, s *Store) http.Handler {
 	mux.HandleFunc("POST /api/heartbeat/{id}", heartbeatHandler)
 	mux.HandleFunc("GET /api/heartbeat/{id}", heartbeatHandler)
 	files, _ := fs.Sub(assets, "web")
+	findPage := func(slug string) *StatusPage {
+		for i := range c.StatusPages {
+			if c.StatusPages[i].Slug == slug {
+				return &c.StatusPages[i]
+			}
+		}
+		return nil
+	}
+	mux.HandleFunc("GET /api/status/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		p := findPage(r.PathValue("slug"))
+		if p == nil {
+			http.NotFound(w, r)
+			return
+		}
+		snapshot(false, p)(w, r)
+	})
+	mux.HandleFunc("GET /status/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		p := findPage(r.PathValue("slug"))
+		if p == nil {
+			http.NotFound(w, r)
+			return
+		}
+		b, _ := fs.ReadFile(files, "index.html")
+		body := strings.Replace(string(b), "<h1>Service status</h1>", "<h1>"+html.EscapeString(p.Name)+"</h1>", 1)
+		body = strings.Replace(body, "<title>Watchlight · Service status</title>", "<title>Watchlight · "+html.EscapeString(p.Name)+"</title>", 1)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(body))
+	})
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		if c.DefaultStatusPage != "" {
+			http.Redirect(w, r, "/status/"+c.DefaultStatusPage, http.StatusFound)
+			return
+		}
+		http.FileServer(http.FS(files)).ServeHTTP(w, r)
+	})
 	mux.HandleFunc("GET /dashboard", auth(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := fs.ReadFile(files, "index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

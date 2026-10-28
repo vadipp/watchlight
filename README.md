@@ -126,3 +126,21 @@ database, and removes them afterward. Browser dependencies are development-only.
 The watchdog may run before email is configured: omit `smtp` entirely for
 observation-only operation. It persists state and logs transitions, but cannot
 send independent fallback alerts until a complete SMTP configuration is added.
+
+## Named public dashboards
+
+Set `default_status_page` to redirect `/` to a configured page. Page membership
+is explicit; each referenced monitor must also have `public: true`. Other
+monitors stay private. For example:
+
+```yaml
+default_status_page: overview
+status_pages:
+  - slug: overview
+    name: Service overview
+    monitors: [example-web]
+```
+
+This serves `/status/overview` and its scoped JSON at `/api/status/overview`.
+Unknown pages return 404. Without a default page, `/` retains the original public
+view. `/api/public` retains the aggregate list of public monitors for compatibility.
