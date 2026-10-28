@@ -8,6 +8,9 @@ watchdog:
   interval: 30s
   max_age: 2m
   telegram_token_env: TELEGRAM_BOT_TOKEN
+  # Optional private heartbeat monitor on the primary, sent after each cycle.
+  heartbeat_url: https://status.example.com/api/heartbeat/watchdog
+  heartbeat_token_env: WATCHDOG_HEARTBEAT_TOKEN
   smtp:
     address: smtp.example.com:587
     user: monitoring@example.com

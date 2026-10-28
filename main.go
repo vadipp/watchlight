@@ -50,7 +50,7 @@ func execute() int {
 			log.Print("watchdog section required")
 			return 1
 		}
-		required = append(required, c.Watchdog.PasswordEnv, c.Watchdog.TelegramTokenEnv)
+		required = append(required, c.Watchdog.PasswordEnv, c.Watchdog.TelegramTokenEnv, c.Watchdog.HeartbeatTokenEnv)
 		if c.Watchdog.SMTP.User != "" {
 			required = append(required, c.Watchdog.SMTP.PasswordEnv)
 		}

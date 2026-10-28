@@ -56,13 +56,15 @@ type Telegram struct {
 	ChatIDEnv    string `yaml:"chat_id_env"`
 }
 type Watchdog struct {
-	URL              string `yaml:"url"`
-	PasswordEnv      string `yaml:"password_env"`
-	User             string `yaml:"user"`
-	TelegramTokenEnv string `yaml:"telegram_token_env"`
-	Interval         string `yaml:"interval"`
-	MaxAge           string `yaml:"max_age"`
-	SMTP             SMTP   `yaml:"smtp"`
+	HeartbeatURL      string `yaml:"heartbeat_url"`
+	HeartbeatTokenEnv string `yaml:"heartbeat_token_env"`
+	URL               string `yaml:"url"`
+	PasswordEnv       string `yaml:"password_env"`
+	User              string `yaml:"user"`
+	TelegramTokenEnv  string `yaml:"telegram_token_env"`
+	Interval          string `yaml:"interval"`
+	MaxAge            string `yaml:"max_age"`
+	SMTP              SMTP   `yaml:"smtp"`
 }
 type SMTP struct {
 	Address     string `yaml:"address"`
@@ -195,6 +197,15 @@ func loadConfig(path string) (Config, error) {
 		return c, errors.New("Telegram requires token_env and chat_id_env")
 	}
 	if w := c.Watchdog; w != nil {
+		if (w.HeartbeatURL == "") != (w.HeartbeatTokenEnv == "") {
+			return c, errors.New("watchdog heartbeat requires URL and token_env")
+		}
+		if w.HeartbeatURL != "" {
+			u, err := url.Parse(w.HeartbeatURL)
+			if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+				return c, errors.New("watchdog heartbeat requires HTTPS URL without credentials, query or fragment")
+			}
+		}
 		if w.Interval == "" {
 			w.Interval = "30s"
 		}

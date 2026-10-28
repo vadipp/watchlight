@@ -55,6 +55,31 @@ func inspectPrimary(ctx context.Context, w Watchdog) error {
 	}
 	return nil
 }
+
+// Report loop liveness, even when the services being observed are unhealthy.
+// Redirects are rejected so a heartbeat cannot silently acknowledge a login page.
+func sendWatchdogHeartbeat(ctx context.Context, w Watchdog) error {
+	token, err := secret(w.HeartbeatTokenEnv)
+	if err != nil {
+		return errors.New("watchdog heartbeat token unavailable")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.HeartbeatURL, nil)
+	if err != nil {
+		return errors.New("invalid watchdog heartbeat URL")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	r, err := client.Do(req)
+	if err != nil {
+		return errors.New("watchdog heartbeat delivery failed")
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		return errors.New("watchdog heartbeat rejected")
+	}
+	return nil
+}
+
 func runWatchdog(ctx context.Context, c Config, s *Store) error {
 	if c.Watchdog == nil {
 		return errors.New("watchdog configuration required")
@@ -105,6 +130,14 @@ func runWatchdog(ctx context.Context, c Config, s *Store) error {
 		}
 		if e := s.setMeta("watchdog", states); e != nil {
 			return e
+		}
+		if w.HeartbeatURL != "" {
+			probe, cancel = context.WithTimeout(ctx, 10*time.Second)
+			err := sendWatchdogHeartbeat(probe, w)
+			cancel()
+			if err != nil {
+				log.Print(err)
+			}
 		}
 		select {
 		case <-ctx.Done():

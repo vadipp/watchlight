@@ -74,6 +74,14 @@ Actual sends validate Telegram's HTTP and JSON success response.
 ./watchlight watchdog -config watchdog.example.yaml
 ```
 
+To monitor the watchdog itself, create a private `heartbeat` monitor on the
+primary and configure `heartbeat_url` and `heartbeat_token_env` on the watchdog.
+It POSTs the token in the Authorization header after each persisted check cycle,
+including cycles that observe failures. The URL must use HTTPS and cannot contain
+credentials, a query or a fragment; redirects are rejected. Delivery failures are
+retried on the next cycle. Allow for probe/email timeouts when choosing `max_age`.
+This measures watchdog liveness, not the health of the services it observes.
+
 Run this on the watchdog host with its own local database and SMTP credentials. It checks
 the primary's authenticated health endpoint, stale monitoring, notification backlog, and
 the primary's Telegram probe. It separately probes Telegram from the watchdog host. Three failed
@@ -112,8 +120,8 @@ go vet ./...
 node --check web/app.js
 ```
 
-No Uptime Kuma code, images or other assets have been copied. The UI uses native
-browser JavaScript and CSS, embedded in the Go executable. No frontend build step.
+The UI uses native browser JavaScript and CSS, embedded in the Go executable.
+No frontend build step.
 
 Not yet included: maintenance scheduling, browser Web Push, notification resend
 controls, long-term charts, bulk-import tools, detailed DNS/ICMP checks. Telegram and SMTP delivery require live credential testing
