@@ -36,6 +36,7 @@ type Config struct {
 	Watchdog          *Watchdog    `yaml:"watchdog"`
 }
 type Monitor struct {
+	Description    string `yaml:"description" json:"-"`
 	Group          string `yaml:"group" json:"-"`
 	ID             string `yaml:"id"`
 	Name           string `yaml:"name"`

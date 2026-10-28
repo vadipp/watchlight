@@ -124,3 +124,78 @@ func TestOwnerGroupsStayPrivateAndPreserveFingerprint(t *testing.T) {
 		}
 	}
 }
+
+func TestTechnicalDetailsOnlyInAuthenticatedOwnerSnapshot(t *testing.T) {
+	s := testStore(t)
+	t.Setenv("DETAIL_PASSWORD", "a-long-owner-password")
+	t.Setenv("DETAIL_TOKEN", "never-return-this-token")
+	m := testMonitor()
+	m.Public = true
+	m.Target = "https://internal.example.test/health"
+	m.Description = "Internal collector explanation"
+	m.BodyContains = "healthy marker"
+	m.TokenEnv = "DETAIL_TOKEN"
+	heartbeat := m
+	heartbeat.ID = "worker"
+	heartbeat.Type = "heartbeat"
+	heartbeat.Target = ""
+	heartbeat.MaxAge = "5m"
+	c := Config{OwnerUser: "owner", OwnerPasswordEnv: "DETAIL_PASSWORD", Monitors: []Monitor{m, heartbeat}, StatusPages: []StatusPage{{Slug: "overview", Name: "Overview", Monitors: []string{m.ID, heartbeat.ID}}}}
+	h := handler(c, s)
+	for _, path := range []string{"/api/private", "/api/public", "/api/status/overview"} {
+		req := httptest.NewRequest("GET", path, nil)
+		private := path == "/api/private"
+		if private {
+			req.SetBasicAuth("owner", "a-long-owner-password")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatal(rec.Code)
+		}
+		var payload any
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		var rows []any
+		if path == "/api/status/overview" {
+			rows = payload.(map[string]any)["monitors"].([]any)
+		} else {
+			rows = payload.([]any)
+		}
+		for _, item := range rows {
+			row := item.(map[string]any)
+			for _, key := range []string{"check", "type", "interval_seconds"} {
+				_, present := row[key]
+				if present != private {
+					t.Fatalf("%s: unexpected %s exposure", path, key)
+				}
+			}
+			if private {
+				details := row["check"].(map[string]any)
+				if details["description"] != m.Description {
+					t.Fatal("missing collector explanation")
+				}
+				if row["id"] == "worker" && details["target"] != "/api/heartbeat/worker" {
+					t.Fatal("missing heartbeat endpoint")
+				}
+				if row["id"] == m.ID && details["target"] != m.Target {
+					t.Fatal("missing HTTP target")
+				}
+			}
+		}
+		for _, secret := range []string{"never-return-this-token", "DETAIL_TOKEN", "DETAIL_PASSWORD"} {
+			if strings.Contains(rec.Body.String(), secret) {
+				t.Fatalf("%s exposed a credential", path)
+			}
+		}
+		if !private && (strings.Contains(rec.Body.String(), m.Target) || strings.Contains(rec.Body.String(), m.Description) || strings.Contains(rec.Body.String(), m.BodyContains)) {
+			t.Fatal("technical values exposed publicly")
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/private", nil))
+	if rec.Code != 401 {
+		t.Fatal("owner details lacked authentication")
+	}
+}

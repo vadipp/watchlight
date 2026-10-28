@@ -41,7 +41,10 @@ function render() {
       }
     }
   }
-  for (const v of views) {
+  const ordered = privateView
+    ? [...views].sort((a, b) => Number(b.state.status === "down") - Number(a.state.status === "down"))
+    : views;
+  for (const v of ordered) {
     const b = el(
       "button",
       undefined,
@@ -86,7 +89,7 @@ function render() {
     ],
     [
       "Response time",
-      v.type === "heartbeat"
+      v.latency_ms === null || v.type === "heartbeat"
         ? "—"
         : v.state.checked
           ? v.state.latency.toFixed(0) + " ms"
@@ -100,6 +103,8 @@ function render() {
   }
   detail.append(metrics);
   const h = [...v.history].reverse();
+  const deltas = h.slice(1).map((p, i) => p.time - h[i].time).filter((d) => d > 0).sort((a, b) => a - b);
+  const cadence = v.interval_seconds || deltas[Math.floor(deltas.length / 2)] || 0;
   const section = el("div", undefined, "section");
   const historyLabel = el("div", undefined, "label");
   section.append(historyLabel);
@@ -107,7 +112,7 @@ function render() {
   const observations = [];
   let prev = null;
   for (const p of h) {
-    if (prev && p.time - prev.time > v.interval_seconds * 1.5) {
+    if (prev && cadence && p.time - prev.time > cadence * 1.5) {
       observations.push({ time: prev.time, gap: true });
     }
     observations.push(p);
@@ -137,7 +142,7 @@ function render() {
     el("span", h.length ? fmt(h[h.length - 1].time) : ""),
   );
   section.append(times);
-  if (h.length > 1 && v.type !== "heartbeat") {
+  if (h.length > 1 && v.latency_ms !== null && v.type !== "heartbeat") {
     const ns = "http://www.w3.org/2000/svg",
       svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 600 125");
@@ -179,6 +184,24 @@ function render() {
       "label",
     ),
   );
+  if (privateView && v.check) {
+    const technical = el("section", undefined, "section technical");
+    technical.append(el("h2", "Check details"));
+    const fields = el("dl");
+    const c = v.check;
+    for (const [label, value] of [
+      ["Type", c.type], ["Target", c.target], ["Description", c.description],
+      ["Interval", c.interval], ["Timeout", c.timeout],
+      ["Failure threshold", c.failures], ["Recovery threshold", c.successes],
+      ["Expected HTTP status", c.expected_status], ["Expected text", c.body_contains],
+      ["Heartbeat freshness", c.max_age],
+    ]) {
+      if (value === undefined || value === "") continue;
+      fields.append(el("dt", label), el("dd", String(value)));
+    }
+    technical.append(fields);
+    detail.append(technical);
+  }
 }
 async function refresh() {
   try {

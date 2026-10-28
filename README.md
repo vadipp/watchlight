@@ -164,3 +164,12 @@ counts. Ungrouped monitors appear under Other. Group names are omitted from publ
 APIs and status pages; grouping changes preserve existing check history and incident
 thresholds. See `scripts/check-agent/README.md` for optional local probes that
 report backup, certificate, telemetry or protocol health through private heartbeats.
+
+Within each owner group, down services appear before other services while their
+relative configuration order is preserved. The bottom of the selected service's
+owner view shows check type, target, timing, thresholds and expected response.
+An optional monitor `description` explains an external heartbeat collector's
+underlying probe. Descriptions and groups do not change check fingerprints.
+Technical configuration, type and polling interval are omitted from both public
+APIs; only the authenticated owner API includes the `check` object. Secret values
+and secret environment names are never included in that object.

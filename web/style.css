@@ -250,6 +250,18 @@ svg polyline {
 .error {
   color: var(--red);
 }
+.technical {
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+.technical dl {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr);
+  gap: 10px 18px;
+  font-size: 12px;
+}
+.technical dt { color: var(--muted); }
+.technical dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 750px) {
   header {
     padding: 20px;

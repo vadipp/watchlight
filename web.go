@@ -16,16 +16,32 @@ import (
 var assets embed.FS
 
 type View struct {
+	Check           *CheckInfo `json:"check,omitempty"`
+	LatencyMS       *float64   `json:"latency_ms"`
 	Group           string     `json:"group,omitempty"`
-	IntervalSeconds float64    `json:"interval_seconds"`
+	IntervalSeconds float64    `json:"interval_seconds,omitempty"`
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
-	Type            string     `json:"type"`
+	Type            string     `json:"type,omitempty"`
 	State           State      `json:"state"`
 	History         []Point    `json:"history"`
 	Incidents       []Incident `json:"incidents"`
 	Uptime          *float64   `json:"uptime"`
 	Samples         int        `json:"samples"`
+}
+
+// Explicit allowlist: credentials and secret environment names never belong here.
+type CheckInfo struct {
+	Type           string `json:"type"`
+	Target         string `json:"target"`
+	Description    string `json:"description,omitempty"`
+	Interval       string `json:"interval"`
+	Timeout        string `json:"timeout"`
+	Failures       int    `json:"failures"`
+	Successes      int    `json:"successes"`
+	ExpectedStatus int    `json:"expected_status,omitempty"`
+	BodyContains   string `json:"body_contains,omitempty"`
+	MaxAge         string `json:"max_age,omitempty"`
 }
 
 func equal(a, b string) bool {
@@ -84,11 +100,29 @@ func handler(c Config, s *Store) http.Handler {
 					v := 100 * float64(up) / float64(total)
 					uptime = &v
 				}
-				group := ""
-				if private {
-					group = m.Group
+				view := View{ID: m.ID, Name: m.Name, State: st, History: h, Incidents: inc, Uptime: uptime, Samples: total}
+				if m.Type != "heartbeat" && st.Checked != 0 {
+					latency := st.Latency
+					view.LatencyMS = &latency
 				}
-				views = append(views, View{group, duration(m.Interval).Seconds(), m.ID, m.Name, m.Type, st, h, inc, uptime, total})
+				if private {
+					view.Group = m.Group
+					view.Type = m.Type
+					view.IntervalSeconds = duration(m.Interval).Seconds()
+					target := m.Target
+					if m.Type == "heartbeat" {
+						target = "/api/heartbeat/" + m.ID
+					}
+					view.Check = &CheckInfo{Type: m.Type, Target: target, Description: m.Description, Interval: m.Interval, Timeout: m.Timeout, Failures: m.Failures, Successes: m.Successes}
+					if m.Type == "http" {
+						view.Check.ExpectedStatus = m.ExpectedStatus
+						view.Check.BodyContains = m.BodyContains
+					}
+					if m.Type == "heartbeat" {
+						view.Check.MaxAge = m.MaxAge
+					}
+				}
+				views = append(views, view)
 			}
 			if page != nil {
 				writeJSON(w, struct {

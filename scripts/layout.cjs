@@ -23,10 +23,10 @@ const assert = require('node:assert/strict');
       const url = new URL(route.request().url());
       if (url.pathname === '/api/health') return route.fulfill({json:{ok:true,pending_notifications:0}});
       if (url.pathname === '/api/private') return route.fulfill({json:
-        ['Operations','Websites','Services','Public'].flatMap((group,g) => Array.from({length: g === 0 ? 36 : 3}, (_,i) => ({...monitor, id:`${g}-${i}`,name:`${group} service ${i}`,group})))
+        ['Operations','Websites','Services','Public'].flatMap((group,g) => Array.from({length: g === 0 ? 36 : 3}, (_,i) => ({...monitor, id:`${g}-${i}`,name:`${group} service ${i}`,group, state:{...monitor.state,status:i===2?'down':'up'}, check:{type:'http',target:'https://internal.example.test/health',description:'A local service probe',interval:'30s',timeout:'10s',failures:3,successes:1,expected_status:200}})))
       });
       if (url.pathname === '/api/public')
-        return route.fulfill({ json: [monitor] });
+        return route.fulfill({ json: [{...monitor,type:undefined,interval_seconds:undefined,latency_ms:1}] });
       const file = ['/', '/dashboard'].includes(url.pathname) ? 'index.html' : url.pathname.slice(1);
       return route.fulfill({
         body: fs.readFileSync(path.join(__dirname, '../web', file)),
@@ -61,13 +61,16 @@ const assert = require('node:assert/strict');
       console.log(`${width}px: ${result.count} blocks, minimum width ${result.min.toFixed(1)}px`);
     }
     assert.equal(await page.locator('.service-group').count(), 0, 'owner groups leaked into public UI');
+    assert.equal(await page.locator('.technical').count(), 0, 'technical panel exposed publicly');
     await page.goto('http://watchlight.test/dashboard');
     await page.waitForSelector('.service-group');
     assert.equal(await page.locator('.service-group').count(), 4);
     assert.equal(await page.locator('.service-group[open]').count(), 1);
     const websiteGroup = page.locator('.service-group').nth(1);
     await websiteGroup.locator('summary').click();
+    assert.match(await websiteGroup.locator('.service').first().textContent(), /Websites service 2/);
     await websiteGroup.locator('.service').first().click();
+    assert.match(await page.locator('.technical').textContent(), /https:\/\/internal.example.test\/health/);
     assert.match(await page.locator('#detail h2').first().textContent(), /Websites/);
     assert(await page.locator('.service-group').nth(1).getAttribute('open') !== null, 'group collapsed on selection');
     for (const width of [2048, 900, 390, 320]) {
