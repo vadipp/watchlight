@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY,body TEXT NOT NULL,att
 CREATE TABLE IF NOT EXISTS hourly(id TEXT NOT NULL,hour INTEGER NOT NULL,total INTEGER NOT NULL,successes INTEGER NOT NULL,latency_sum REAL NOT NULL,latency_max REAL NOT NULL,PRIMARY KEY(id,hour));
 CREATE TABLE IF NOT EXISTS heartbeats(id TEXT PRIMARY KEY,time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS heartbeat_reports(id TEXT PRIMARY KEY,time INTEGER NOT NULL,detail TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS snoozes(id TEXT PRIMARY KEY,armed INTEGER NOT NULL,passes INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);`)
 	if e != nil {
 		db.Close()
@@ -103,6 +104,29 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 		v.Fail = 0
 		v.Pass = 0
 	}
+	var snoozePasses int
+	snoozeErr := tx.QueryRow("SELECT passes FROM snoozes WHERE id=?", m.ID).Scan(&snoozePasses)
+	if snoozeErr != nil && snoozeErr != sql.ErrNoRows {
+		return snoozeErr
+	}
+	snoozed := snoozeErr == nil
+	recovered := false
+	if snoozed {
+		if ok {
+			snoozePasses++
+		} else {
+			snoozePasses = 0
+		}
+		recovered = ok && snoozePasses >= m.Successes
+		if recovered {
+			_, e = tx.Exec("DELETE FROM snoozes WHERE id=?", m.ID)
+		} else {
+			_, e = tx.Exec("UPDATE snoozes SET passes=? WHERE id=?", snoozePasses, m.ID)
+		}
+		if e != nil {
+			return e
+		}
+	}
 	old := v.Status
 	if ok {
 		v.Pass++
@@ -130,14 +154,41 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 		if _, e = tx.Exec("INSERT INTO incidents VALUES(?,?,?)", m.ID, v.Status, now); e != nil {
 			return e
 		}
-		if notify && (v.Status == "down" || old == "down") {
+		if notify && !snoozed && (v.Status == "down" || old == "down") {
 			body := "Watchlight: " + m.Name + " is " + v.Status
 			if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", body, now); e != nil {
 				return e
 			}
 		}
 	}
+	if notify && recovered {
+		if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", "Watchlight: "+m.Name+" recovered and is visible again", now); e != nil {
+			return e
+		}
+	}
 	return tx.Commit()
+}
+
+// A snooze is a one-time persisted action; old successes cannot release it.
+func (s *Store) hideUntilOK(id string) error {
+	_, err := s.Exec("INSERT INTO snoozes(id,armed,passes) VALUES(?,?,0) ON CONFLICT(id) DO UPDATE SET armed=excluded.armed,passes=0", id, time.Now().Unix())
+	return err
+}
+func (s *Store) snoozesContext(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.QueryContext(ctx, "SELECT id FROM snoozes")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	hidden := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		hidden[id] = true
+	}
+	return hidden, rows.Err()
 }
 func (s *Store) incidents(ctx context.Context, id string) ([]Incident, error) {
 	r, e := s.QueryContext(ctx, "SELECT id,status,time FROM incidents WHERE id=? ORDER BY time DESC LIMIT 30", id)

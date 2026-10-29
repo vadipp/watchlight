@@ -210,3 +210,21 @@ and secret environment names are never included in that object.
 Response-time charts show a zero-based millisecond scale with labelled midpoint
 and upper bound, subtle grid lines, and the observed minimum–maximum range. The
 scale rounds up to a readable bound and retains precision below one millisecond.
+
+## Hide a monitor until recovery
+
+To temporarily remove a monitor from dashboards while continuing checks/history:
+
+```sh
+watchlight hide-until-ok -config config.yaml -id example-monitor
+```
+
+Run against the same database as the primary, with its normal filesystem permissions
+(and the same data/config mounts when using Compose). The action is persisted in
+SQLite and survives restarts. It excludes the monitor from public summary/detail
+APIs and from owner group/dashboard counts. Owners can inspect it in a collapsed
+Hidden checks section. Alerts are muted until consecutive fresh successful checks
+meet the configured recovery threshold; earlier successes do not count. Recovery
+atomically clears the snooze and queues one recovery/visibility notification when
+notifications are enabled. Later failures behave normally. Repeat the command to
+rearm the snooze. No configuration edit or service restart is needed for the action.

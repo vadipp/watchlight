@@ -35,10 +35,11 @@ type View struct {
 }
 
 type MonitorSummary struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Group string `json:"group,omitempty"`
-	State struct {
+	Hidden bool   `json:"hidden,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Group  string `json:"group,omitempty"`
+	State  struct {
 		Status string `json:"status"`
 	} `json:"state"`
 }
@@ -81,11 +82,16 @@ func handler(c Config, s *Store) http.Handler {
 	snapshot := func(private bool, page *StatusPage) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			detailID := r.PathValue("id")
+			hidden, err := s.snoozesContext(r.Context())
+			if err != nil {
+				http.Error(w, "Storage unavailable", 503)
+				return
+			}
 			allowed := func(m Monitor) bool {
 				if private {
 					return true
 				}
-				if !m.Public {
+				if hidden[m.ID] || !m.Public {
 					return false
 				}
 				if page == nil {
@@ -124,6 +130,7 @@ func handler(c Config, s *Store) http.Handler {
 					v.State.Status = status(m, states[m.ID]).Status
 					if private {
 						v.Group = m.Group
+						v.Hidden = hidden[m.ID]
 					}
 					list = append(list, v)
 				}

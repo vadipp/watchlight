@@ -17,16 +17,17 @@ func main() { os.Exit(execute()) }
 func execute() int {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: watchlight validate|serve|watchdog [-config config.yaml]")
+		fmt.Fprintln(os.Stderr, "usage: watchlight validate|serve|watchdog|hide-until-ok [-config config.yaml]")
 		return 2
 	}
 	mode := os.Args[1]
 	flags := flag.NewFlagSet(mode, flag.ContinueOnError)
+	id := flags.String("id", "", "monitor ID for hide-until-ok")
 	path := flags.String("config", "config.yaml", "configuration file")
 	if flags.Parse(os.Args[2:]) != nil {
 		return 2
 	}
-	if mode != "validate" && mode != "serve" && mode != "watchdog" {
+	if mode != "validate" && mode != "serve" && mode != "watchdog" && mode != "hide-until-ok" {
 		log.Print("unknown command")
 		return 2
 	}
@@ -37,6 +38,31 @@ func execute() int {
 	}
 	if mode == "validate" {
 		fmt.Printf("Configuration valid: %d monitors\n", len(c.Monitors))
+		return 0
+	}
+	if mode == "hide-until-ok" {
+		found := false
+		for _, m := range c.Monitors {
+			if m.ID == *id {
+				found = true
+			}
+		}
+		if !found {
+			log.Print("unknown monitor ID")
+			return 2
+		}
+		syscall.Umask(0077)
+		s, err := openStore(c.Database)
+		if err != nil {
+			log.Print(err)
+			return 1
+		}
+		defer s.Close()
+		if err := s.hideUntilOK(*id); err != nil {
+			log.Print(err)
+			return 1
+		}
+		fmt.Println("Monitor hidden until a fresh recovery")
 		return 0
 	}
 	required := []string{}

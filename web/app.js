@@ -37,15 +37,17 @@ function render() {
   const list = document.querySelector("#services");
   list.replaceChildren();
   if (!views.some((v) => v.id === selected)) selected = views[0]?.id;
+  const activeViews = views.filter(v => !v.hidden);
+  const hiddenViews = views.filter(v => v.hidden);
   const groups = new Map();
   if (privateView) {
-    for (const v of views) {
+    for (const v of activeViews) {
       const name = v.group || "Other";
       if (!groups.has(name)) {
         const group = el("details", undefined, "service-group");
-        group.open = expandedGroups.get(name) ?? views.find((v) => v.id === selected)?.group === v.group;
+        group.open = expandedGroups.get(name) ?? activeViews.find((v) => v.id === selected)?.group === v.group;
         const summary = el("summary");
-        const members = views.filter((v) => (v.group || "Other") === name);
+        const members = activeViews.filter((v) => (v.group || "Other") === name);
         const down = members.filter((v) => v.state.status === "down").length;
         const unknown = members.filter((v) => v.state.status === "unknown").length;
         summary.append(el("span", name), el("small", `${members.length}${down ? ` · ${down} down` : unknown ? ` · ${unknown} pending` : " · all up"}`, down ? "error" : ""));
@@ -59,9 +61,17 @@ function render() {
     }
   }
   const ordered = privateView
-    ? [...views].sort((a, b) => Number(b.state.status === "down") - Number(a.state.status === "down"))
-    : views;
-  for (const v of ordered) {
+    ? [...activeViews].sort((a, b) => Number(b.state.status === "down") - Number(a.state.status === "down"))
+    : activeViews;
+  let hiddenList;
+  if (privateView && hiddenViews.length) {
+    hiddenList = el("details", undefined, "hidden-checks");
+    hiddenList.open = expandedGroups.get("hidden-checks") ?? false;
+    hiddenList.append(el("summary", "Hidden checks · " + hiddenViews.length));
+    hiddenList.addEventListener("toggle", () => expandedGroups.set("hidden-checks", hiddenList.open));
+    list.append(hiddenList);
+  }
+  for (const v of [...ordered, ...hiddenViews]) {
     const b = el(
       "button",
       undefined,
@@ -77,15 +87,15 @@ function render() {
       render();
       loadDetail();
     };
-    (privateView ? groups.get(v.group || "Other") : list).append(b);
+    (v.hidden ? hiddenList : privateView ? groups.get(v.group || "Other") : list).append(b);
   }
   const sum = document.querySelector("#summary");
-  const down = views.filter((v) => v.state.status === "down").length,
-    unknown = views.filter((v) => v.state.status === "unknown").length;
+  const down = activeViews.filter((v) => v.state.status === "down").length,
+    unknown = activeViews.filter((v) => v.state.status === "unknown").length;
   sum.className =
-    "summary " + (down ? "down" : unknown || !views.length ? "unknown" : "up");
-  sum.textContent = !views.length
-    ? "No services published"
+    "summary " + (down ? "down" : unknown || !activeViews.length ? "unknown" : "up");
+  sum.textContent = !activeViews.length
+    ? (hiddenViews.length ? "No active services · checks hidden until recovery" : "No services published")
     : down
       ? `${down} service${down === 1 ? "" : "s"} experiencing problems`
       : unknown
@@ -103,6 +113,7 @@ function renderDetail() {
     return;
   }
   detail.append(el("h2", summary.name));
+  if (summary.hidden) detail.append(el("p", "Hidden until recovery · excluded from dashboard status and alerts. Monitoring and history continue.", "label"));
   const selector = el("div", undefined, "window-selector");
   selector.setAttribute("role", "group");
   selector.setAttribute("aria-label", "History window");
