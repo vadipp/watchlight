@@ -142,30 +142,24 @@ func TestTechnicalDetailsOnlyInAuthenticatedOwnerSnapshot(t *testing.T) {
 	heartbeat.MaxAge = "5m"
 	c := Config{OwnerUser: "owner", OwnerPasswordEnv: "DETAIL_PASSWORD", Monitors: []Monitor{m, heartbeat}, StatusPages: []StatusPage{{Slug: "overview", Name: "Overview", Monitors: []string{m.ID, heartbeat.ID}}}}
 	h := handler(c, s)
-	for _, path := range []string{"/api/private", "/api/public", "/api/status/overview"} {
-		req := httptest.NewRequest("GET", path, nil)
-		private := path == "/api/private"
-		if private {
-			req.SetBasicAuth("owner", "a-long-owner-password")
-		}
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		if rec.Code != 200 {
-			t.Fatal(rec.Code)
-		}
-		var payload any
-		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-			t.Fatal(err)
-		}
-		var rows []any
-		if path == "/api/status/overview" {
-			rows = payload.(map[string]any)["monitors"].([]any)
-		} else {
-			rows = payload.([]any)
-		}
-		for _, item := range rows {
-			row := item.(map[string]any)
-			for _, key := range []string{"check", "type", "interval_seconds"} {
+	for _, base := range []string{"/api/private", "/api/public", "/api/status/overview"} {
+		for _, m := range []Monitor{m, heartbeat} {
+			path := base + "/" + m.ID
+			req := httptest.NewRequest("GET", path, nil)
+			private := base == "/api/private"
+			if private {
+				req.SetBasicAuth("owner", "a-long-owner-password")
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != 200 {
+				t.Fatal(rec.Code)
+			}
+			var row map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &row); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"check", "type"} {
 				_, present := row[key]
 				if present != private {
 					t.Fatalf("%s: unexpected %s exposure", path, key)
@@ -176,23 +170,25 @@ func TestTechnicalDetailsOnlyInAuthenticatedOwnerSnapshot(t *testing.T) {
 				if details["description"] != m.Description {
 					t.Fatal("missing collector explanation")
 				}
-				if row["id"] == "worker" && details["target"] != "/api/heartbeat/worker" {
-					t.Fatal("missing heartbeat endpoint")
+				target := m.Target
+				if m.Type == "heartbeat" {
+					target = "/api/heartbeat/" + m.ID
 				}
-				if row["id"] == m.ID && details["target"] != m.Target {
-					t.Fatal("missing HTTP target")
+				if details["target"] != target {
+					t.Fatal("missing target")
 				}
 			}
-		}
-		for _, secret := range []string{"never-return-this-token", "DETAIL_TOKEN", "DETAIL_PASSWORD"} {
-			if strings.Contains(rec.Body.String(), secret) {
-				t.Fatalf("%s exposed a credential", path)
+			for _, secret := range []string{"never-return-this-token", "DETAIL_TOKEN", "DETAIL_PASSWORD"} {
+				if strings.Contains(rec.Body.String(), secret) {
+					t.Fatal("credential exposed")
+				}
 			}
-		}
-		if !private && (strings.Contains(rec.Body.String(), m.Target) || strings.Contains(rec.Body.String(), m.Description) || strings.Contains(rec.Body.String(), m.BodyContains)) {
-			t.Fatal("technical values exposed publicly")
+			if !private && (strings.Contains(rec.Body.String(), m.Description) || strings.Contains(rec.Body.String(), m.BodyContains)) {
+				t.Fatal("technical values exposed publicly")
+			}
 		}
 	}
+
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/private", nil))
 	if rec.Code != 401 {

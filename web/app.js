@@ -2,7 +2,12 @@
 const privateView = location.pathname === "/dashboard";
 const statusSlug = location.pathname.startsWith("/status/") ? location.pathname.slice(8) : null;
 let selectedWindow = "24h";
-let refreshSequence = 0;
+const endpoint = privateView ? "/api/private" : statusSlug ? "/api/status/" + encodeURIComponent(statusSlug) : "/api/public";
+const detailCache = new Map();
+const detailTTL = 15000;
+let detailRequest = null, detailError = null;
+let listLoading = false, healthLoading = false;
+const detailKey = () => JSON.stringify([selected, selectedWindow]);
 let selected = null,
   views = [];
 const expandedGroups = new Map();
@@ -70,6 +75,7 @@ function render() {
     b.onclick = () => {
       selected = v.id;
       render();
+      loadDetail();
     };
     (privateView ? groups.get(v.group || "Other") : list).append(b);
   }
@@ -85,24 +91,38 @@ function render() {
       : unknown
         ? `${unknown} service${unknown === 1 ? "" : "s"} awaiting fresh checks`
         : "All services operational";
+  renderDetail();
+}
+function renderDetail() {
+  historyObserver.disconnect();
   const detail = document.querySelector("#detail");
   detail.replaceChildren();
-  const v = views.find((v) => v.id === selected);
-  if (!v) {
+  const summary = views.find((v) => v.id === selected);
+  if (!summary) {
     detail.append(el("p", "No services to display."));
     return;
   }
-  detail.append(el("h2", v.name));
+  detail.append(el("h2", summary.name));
   const selector = el("div", undefined, "window-selector");
   selector.setAttribute("role", "group");
   selector.setAttribute("aria-label", "History window");
   for (const [key, label] of [["4h", "4 hours"], ["24h", "24 hours"], ["7d", "7 days"]]) {
     const button = el("button", label);
     button.setAttribute("aria-pressed", String(key === selectedWindow));
-    button.onclick = () => { selectedWindow = key; refresh(); };
+    button.onclick = () => { selectedWindow = key; renderDetail(); loadDetail(); };
     selector.append(button);
   }
   detail.append(selector);
+  const cached = detailCache.get(detailKey());
+  const error = detailError?.key === detailKey() ? detailError.message : null;
+  if (error) detail.append(el("p", error + (cached ? " Displayed details may be stale." : ""), "label error"));
+  if (!cached) {
+    if (!error) detail.append(el("p", "Loading details…", "label"));
+    return;
+  }
+  const v = {...cached.data, state: {...cached.data.state, status: summary.state.status}};
+  if (Date.now() - cached.at >= detailTTL && detailRequest?.key === detailKey())
+    detail.append(el("p", "Updating details…", "label"));
   const metrics = el("div", undefined, "metrics");
   for (const [label, value] of [
     [
@@ -235,51 +255,78 @@ function render() {
     detail.append(technical);
   }
 }
-async function refresh() {
-  const sequence = ++refreshSequence;
+async function loadDetail(force = false) {
+  const key = detailKey();
+  if (detailRequest?.key === key) return;
+  detailRequest?.controller.abort();
+  detailRequest = null;
+  detailError = null;
+  if (!selected) { renderDetail(); return; }
+  const cached = detailCache.get(key);
+  if (!force && cached && Date.now() - cached.at < detailTTL) { renderDetail(); return; }
+  const request = {key, controller: new AbortController()};
+  detailRequest = request;
+  renderDetail();
   try {
-    const endpoint = privateView ? "/api/private" : statusSlug ? "/api/status/" + encodeURIComponent(statusSlug) : "/api/public";
-    const r = await fetch(endpoint + "?window=" + selectedWindow, {
-      cache: "no-store",
+    const r = await fetch(endpoint + "/" + encodeURIComponent(selected) + "?window=" + selectedWindow, {
+      cache: "no-store", signal: request.controller.signal,
     });
     if (!r.ok) throw Error();
     const data = await r.json();
-    if (sequence !== refreshSequence) return;
-    views = statusSlug ? data.monitors : data;
-    if (privateView) {
-      const healthResponse = await fetch("/api/health", { cache: "no-store" });
-      const health = await healthResponse.json();
-      const panel = document.querySelector("#delivery");
-      panel.hidden = false;
-      const telegram = health.telegram
-        ? health.telegram.ok
-          ? "API reachable"
-          : "API probe failing or pending"
-        : "not configured";
-      panel.textContent =
-        "Monitor engine: " +
-        (health.ok ? "checks fresh" : "checks stale") +
-        " · Telegram: " +
-        telegram +
-        " · Queued alerts: " +
-        health.pending_notifications;
-    }
-    if (sequence !== refreshSequence) return;
-    document.querySelector("#updated").textContent =
-      "Updated " + fmt(Date.now()/1000);
-    render();
-  } catch {
-    if (sequence !== refreshSequence) return;
-    document.querySelector("#summary").textContent =
-      "Unable to refresh monitoring data";
-    document.querySelector("#summary").className = "summary unknown";
-    document.querySelector("#updated").textContent =
-      "Connection lost · displayed details may be stale";
+    if (request !== detailRequest || key !== detailKey()) return;
+    detailCache.delete(key);
+    detailCache.set(key, {data, at: Date.now()});
+    // Bound the per-page cache when many monitors/windows are visited.
+    if (detailCache.size > 24) detailCache.delete(detailCache.keys().next().value);
+  } catch (error) {
+    if (request !== detailRequest || key !== detailKey()) return;
+    if (error.name !== "AbortError") detailError = {key, message: "Unable to load details. Retrying on the next refresh."};
+  } finally {
+    if (request === detailRequest) { detailRequest = null; renderDetail(); }
   }
 }
+async function refreshList() {
+  if (listLoading) return;
+  listLoading = true;
+  try {
+    const r = await fetch(endpoint, {cache: "no-store"});
+    if (!r.ok) throw Error();
+    const data = await r.json();
+    views = statusSlug ? data.monitors : data;
+    if (!views.some(v => v.id === selected)) {
+      selected = views[0]?.id ?? null;
+      detailRequest?.controller.abort();
+      detailRequest = null;
+    }
+    render();
+    loadDetail();
+    document.querySelector("#updated").textContent = "Updated " + fmt(Date.now()/1000);
+  } catch {
+    document.querySelector("#summary").textContent = "Unable to refresh monitoring data";
+    document.querySelector("#summary").className = "summary unknown";
+    document.querySelector("#updated").textContent = "Connection lost · displayed statuses may be stale";
+  } finally { listLoading = false; }
+}
+async function refreshHealth() {
+  if (!privateView || healthLoading) return;
+  healthLoading = true;
+  const panel = document.querySelector("#delivery");
+  panel.hidden = false;
+  try {
+    const r = await fetch("/api/health", {cache: "no-store"});
+    if (!r.ok && r.status !== 503) throw Error();
+    const health = await r.json();
+    const telegram = health.telegram ? health.telegram.ok ? "API reachable" : "API probe failing or pending" : "not configured";
+    panel.textContent = "Monitor engine: " + (health.ok ? "checks fresh" : "checks stale") + " · Telegram: " + telegram + " · Queued alerts: " + health.pending_notifications;
+  } catch { panel.textContent = "Unable to refresh engine health"; }
+  finally { healthLoading = false; }
+}
+window.addEventListener("pagehide", () => detailRequest?.controller.abort());
+
 if (privateView) {
   document.querySelector("h1").textContent = "Owner dashboard";
   document.querySelector("aside").classList.add("grouped");
 }
-refresh();
-setInterval(refresh, 15000);
+refreshList();
+refreshHealth();
+setInterval(() => { refreshList(); refreshHealth(); loadDetail(true); }, 15000);

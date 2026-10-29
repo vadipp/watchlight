@@ -54,9 +54,9 @@ func TestContainerReportsPersistRecoverAndStayPrivate(t *testing.T) {
 	if s.state(m.ID).Status != "down" {
 		t.Fatal("failure not applied")
 	}
-	for _, route := range []string{"/api/public", "/api/status/example", "/api/private"} {
+	for _, route := range []string{"/api/public/stack", "/api/status/example/stack", "/api/private/stack"} {
 		r := httptest.NewRequest("GET", route, nil)
-		if route == "/api/private" {
+		if route == "/api/private/stack" {
 			r.SetBasicAuth("owner", "test-owner-password")
 		}
 		w := httptest.NewRecorder()
@@ -64,7 +64,7 @@ func TestContainerReportsPersistRecoverAndStayPrivate(t *testing.T) {
 		if w.Code != 200 {
 			t.Fatalf("route %s failed", route)
 		}
-		if strings.Contains(w.Body.String(), "example-worker-1") != (route == "/api/private") {
+		if strings.Contains(w.Body.String(), "example-worker-1") != (route == "/api/private/stack") {
 			t.Fatalf("report visibility incorrect on %s", route)
 		}
 	}

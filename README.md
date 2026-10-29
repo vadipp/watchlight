@@ -55,9 +55,23 @@ must be reached before recovery. An initial down event alerts; initial successfu
 startup does not. Missing scheduler progress appears as unknown, never healthy.
 The grouped window selector offers 4 hours, 24 hours (default), and 7 days.
 Observed uptime, history and response-time plots share that exact rolling window;
-timestamps use dd.mm.yyyy and 24-hour local time. The API accepts
-`?window=4h`, `24h`, or `7d` and returns explicit window boundaries plus
-240 time buckets. The legacy latest-240-results history remains available.
+timestamps use dd.mm.yyyy and 24-hour local time.
+
+Monitor lists at `/api/public`, authenticated `/api/private`, and scoped
+`/api/status/{slug}` contain only IDs, names, current statuses and owner groups.
+They read current state without querying history. Append `/{id}?window=4h`,
+`24h` (default), or `7d` for one monitor's metrics, explicit window boundaries,
+240 time buckets, recent status changes and permitted check details. Public detail
+routes enforce visibility and page membership; owner details require authentication.
+Raw check history is not returned.
+
+The UI loads list, selected details and owner health independently, refreshing
+about every 15 seconds without overlapping requests in each stream. Switching
+monitor/window aborts obsolete detail requests. A bounded in-memory cache reuses
+monitor/window details for 15 seconds; failures keep the list usable and label
+previously loaded details as stale. Request contexts reach database queries and
+aggregation, so disconnected clients can stop obsolete read work.
+
 The strip combines buckets into up to 60 equal-duration bars. Each bar stacks
 green (successful coverage), red (failed coverage), and grey (unknown time).
 A check covers at most one configured interval, ending earlier if another check

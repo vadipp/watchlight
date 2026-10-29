@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	_ "modernc.org/sqlite"
@@ -138,24 +139,8 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 	}
 	return tx.Commit()
 }
-func (s *Store) history(id string) ([]Point, error) {
-	rows, e := s.Query("SELECT time,ok,latency FROM results WHERE id=? ORDER BY time DESC LIMIT 240", id)
-	if e != nil {
-		return nil, e
-	}
-	defer rows.Close()
-	v := []Point{}
-	for rows.Next() {
-		var p Point
-		if e = rows.Scan(&p.Time, &p.OK, &p.Latency); e != nil {
-			return nil, e
-		}
-		v = append(v, p)
-	}
-	return v, rows.Err()
-}
-func (s *Store) incidents(id string) ([]Incident, error) {
-	r, e := s.Query("SELECT id,status,time FROM incidents WHERE id=? ORDER BY time DESC LIMIT 30", id)
+func (s *Store) incidents(ctx context.Context, id string) ([]Incident, error) {
+	r, e := s.QueryContext(ctx, "SELECT id,status,time FROM incidents WHERE id=? ORDER BY time DESC LIMIT 30", id)
 	if e != nil {
 		return nil, e
 	}
@@ -228,7 +213,7 @@ type WindowBucket struct {
 	Latency  float64 `json:"latency"`
 }
 
-func (s *Store) windowHistory(id string, start, end int64, cadence float64) ([]WindowBucket, int, int, error) {
+func (s *Store) windowHistory(ctx context.Context, id string, start, end int64, cadence float64) ([]WindowBucket, int, int, error) {
 	const count = 240
 	width := float64(end-start) / count
 	buckets := make([]WindowBucket, count)
@@ -236,7 +221,7 @@ func (s *Store) windowHistory(id string, start, end int64, cadence float64) ([]W
 		buckets[i].Time = start + int64(float64(i)*width)
 		buckets[i].End = start + int64(float64(i+1)*width)
 	}
-	rows, err := s.Query("SELECT time,ok,latency FROM results WHERE id=? AND time>=? AND time<=? ORDER BY time", id, start-int64(cadence)-1, end)
+	rows, err := s.QueryContext(ctx, "SELECT time,ok,latency FROM results WHERE id=? AND time>=? AND time<=? ORDER BY time", id, start-int64(cadence)-1, end)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -261,6 +246,9 @@ func (s *Store) windowHistory(id string, start, end int64, cadence float64) ([]W
 		}
 	}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, 0, err
+		}
 		var point Point
 		if err := rows.Scan(&point.Time, &point.OK, &point.Latency); err != nil {
 			return nil, 0, 0, err
@@ -291,4 +279,29 @@ func (s *Store) windowHistory(id string, start, end int64, cadence float64) ([]W
 		}
 	}
 	return buckets, total, successes, rows.Err()
+}
+
+func (s *Store) statesContext(ctx context.Context) (map[string]State, error) {
+	rows, err := s.QueryContext(ctx, "SELECT id,status,checked,latency,fail,pass,error FROM states")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	states := map[string]State{}
+	for rows.Next() {
+		var v State
+		if err := rows.Scan(&v.ID, &v.Status, &v.Checked, &v.Latency, &v.Fail, &v.Pass, &v.Error); err != nil {
+			return nil, err
+		}
+		states[v.ID] = v
+	}
+	return states, rows.Err()
+}
+func (s *Store) stateContext(ctx context.Context, id string) (State, error) {
+	v := State{ID: id, Status: "unknown"}
+	err := s.QueryRowContext(ctx, "SELECT status,checked,latency,fail,pass,error FROM states WHERE id=?", id).Scan(&v.Status, &v.Checked, &v.Latency, &v.Fail, &v.Pass, &v.Error)
+	if err == sql.ErrNoRows {
+		err = nil
+	}
+	return v, err
 }

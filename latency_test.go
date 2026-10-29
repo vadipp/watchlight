@@ -22,17 +22,22 @@ func TestOptionalLatency(t *testing.T) {
 	t.Setenv("TEST_LATENCY_PASSWORD", "test-password")
 	c := Config{OwnerPasswordEnv: "TEST_LATENCY_PASSWORD", Monitors: []Monitor{m}}
 	// Old measurements must also be hidden immediately after disabling.
-	for _, path := range []string{"/api/public", "/api/private"} {
+	for _, path := range []string{"/api/public/web", "/api/private/web"} {
 		r := httptest.NewRequest("GET", path, nil)
 		r.SetBasicAuth("", "test-password")
 		w := httptest.NewRecorder()
 		handler(c, s).ServeHTTP(w, r)
-		var views []View
-		if err := json.Unmarshal(w.Body.Bytes(), &views); err != nil {
+		var view View
+		if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
 			t.Fatal(err)
 		}
-		if len(views) != 1 || views[0].LatencyMS != nil || views[0].State.Latency != 0 || views[0].History[0].Latency != 0 {
+		if view.LatencyMS != nil || view.State.Latency != 0 {
 			t.Fatalf("timing exposed: %s", w.Body.String())
+		}
+		for _, b := range view.Buckets {
+			if b.Latency != 0 {
+				t.Fatal("bucket latency exposed")
+			}
 		}
 	}
 	if err := s.record(m, false, 456, "failure", true); err != nil {

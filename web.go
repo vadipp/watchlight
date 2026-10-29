@@ -19,21 +19,28 @@ import (
 var assets embed.FS
 
 type View struct {
-	WindowStart     int64          `json:"window_start"`
-	WindowEnd       int64          `json:"window_end"`
-	Buckets         []WindowBucket `json:"buckets"`
-	Check           *CheckInfo     `json:"check,omitempty"`
-	LatencyMS       *float64       `json:"latency_ms"`
-	Group           string         `json:"group,omitempty"`
-	IntervalSeconds float64        `json:"interval_seconds,omitempty"`
-	ID              string         `json:"id"`
-	Name            string         `json:"name"`
-	Type            string         `json:"type,omitempty"`
-	State           State          `json:"state"`
-	History         []Point        `json:"history"`
-	Incidents       []Incident     `json:"incidents"`
-	Uptime          *float64       `json:"uptime"`
-	Samples         int            `json:"samples"`
+	WindowStart int64          `json:"window_start"`
+	WindowEnd   int64          `json:"window_end"`
+	Buckets     []WindowBucket `json:"buckets"`
+	Check       *CheckInfo     `json:"check,omitempty"`
+	LatencyMS   *float64       `json:"latency_ms"`
+	Group       string         `json:"group,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Type        string         `json:"type,omitempty"`
+	State       State          `json:"state"`
+	Incidents   []Incident     `json:"incidents"`
+	Uptime      *float64       `json:"uptime"`
+	Samples     int            `json:"samples"`
+}
+
+type MonitorSummary struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Group string `json:"group,omitempty"`
+	State struct {
+		Status string `json:"status"`
+	} `json:"state"`
 }
 
 // Explicit allowlist: credentials and secret environment names never belong here.
@@ -73,6 +80,75 @@ func handler(c Config, s *Store) http.Handler {
 	}
 	snapshot := func(private bool, page *StatusPage) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			detailID := r.PathValue("id")
+			allowed := func(m Monitor) bool {
+				if private {
+					return true
+				}
+				if !m.Public {
+					return false
+				}
+				if page == nil {
+					return true
+				}
+				for _, id := range page.Monitors {
+					if id == m.ID {
+						return true
+					}
+				}
+				return false
+			}
+			status := func(m Monitor, st State) State {
+				if st.Checked == 0 || time.Since(time.Unix(st.Checked, 0)) > duration(m.Interval)+duration(m.Timeout)+15*time.Second {
+					st.Status = "unknown"
+				}
+				if !private {
+					st.Error = ""
+				}
+				return st
+			}
+			if detailID == "" {
+				states, err := s.statesContext(r.Context())
+				if err != nil {
+					if r.Context().Err() == nil {
+						http.Error(w, "Storage unavailable", 503)
+					}
+					return
+				}
+				list := []MonitorSummary{}
+				for _, m := range c.Monitors {
+					if !allowed(m) {
+						continue
+					}
+					v := MonitorSummary{ID: m.ID, Name: m.Name}
+					v.State.Status = status(m, states[m.ID]).Status
+					if private {
+						v.Group = m.Group
+					}
+					list = append(list, v)
+				}
+				if page != nil {
+					writeJSON(w, struct {
+						Slug     string           `json:"slug"`
+						Name     string           `json:"name"`
+						Monitors []MonitorSummary `json:"monitors"`
+					}{page.Slug, page.Name, list})
+				} else {
+					writeJSON(w, list)
+				}
+				return
+			}
+			var chosen *Monitor
+			for i := range c.Monitors {
+				if c.Monitors[i].ID == detailID && allowed(c.Monitors[i]) {
+					chosen = &c.Monitors[i]
+					break
+				}
+			}
+			if chosen == nil {
+				http.NotFound(w, r)
+				return
+			}
 			hours := 24
 			switch r.URL.Query().Get("window") {
 			case "", "24h":
@@ -86,94 +162,75 @@ func handler(c Config, s *Store) http.Handler {
 			}
 			end := time.Now().Unix()
 			start := end - int64(hours)*3600
-			views := []View{}
-			members := map[string]bool{}
-			if page != nil {
-				for _, id := range page.Monitors {
-					members[id] = true
+			m := *chosen
+			st, err := s.stateContext(r.Context(), m.ID)
+			if err != nil {
+				if r.Context().Err() == nil {
+					http.Error(w, "Storage unavailable", 503)
 				}
+				return
 			}
-			for _, m := range c.Monitors {
-				if !private && (!m.Public || (page != nil && !members[m.ID])) {
-					continue
-				}
-				st := s.state(m.ID)
-				if st.Checked == 0 || time.Since(time.Unix(st.Checked, 0)) > duration(m.Interval)+duration(m.Timeout)+15*time.Second {
-					st.Status = "unknown"
-				}
-				if !private {
-					st.Error = ""
-				}
-				buckets, total, up, e := s.windowHistory(m.ID, start, end, duration(m.Interval).Seconds())
-				h, historyErr := s.history(m.ID)
-				if historyErr != nil {
-					http.Error(w, "Storage unavailable", 503)
-					return
-				}
-				if e != nil {
-					http.Error(w, "Storage unavailable", 503)
-					return
-				}
-				inc, e := s.incidents(m.ID)
-				if e != nil {
-					http.Error(w, "Storage unavailable", 503)
-					return
-				}
+			st = status(m, st)
 
-				var uptime *float64
-				if total > 0 {
-					v := 100 * float64(up) / float64(total)
-					uptime = &v
+			buckets, total, up, e := s.windowHistory(r.Context(), m.ID, start, end, duration(m.Interval).Seconds())
+			if e != nil {
+				if r.Context().Err() == nil {
+					http.Error(w, "Storage unavailable", 503)
 				}
-				if !m.recordsLatency() {
-					st.Latency = 0
-					for i := range buckets {
-						buckets[i].Latency = 0
-					}
-					for i := range h {
-						h[i].Latency = 0
-					}
-				}
-				view := View{WindowStart: start, WindowEnd: end, Buckets: buckets, ID: m.ID, Name: m.Name, State: st, History: h, Incidents: inc, Uptime: uptime, Samples: total}
-				if m.recordsLatency() && st.Checked != 0 {
-					latency := st.Latency
-					view.LatencyMS = &latency
-				}
-				if private {
-					view.Group = m.Group
-					view.Type = m.Type
-					view.IntervalSeconds = duration(m.Interval).Seconds()
-					target := m.Target
-					if m.Type == "heartbeat" {
-						target = "/api/heartbeat/" + m.ID
-					}
-					view.Check = &CheckInfo{Type: m.Type, Target: target, Description: m.Description, Interval: m.Interval, Timeout: m.Timeout, Failures: m.Failures, Successes: m.Successes}
-					if m.Type == "http" {
-						enabled := m.recordsLatency()
-						view.Check.RecordLatency = &enabled
-						view.Check.DisableKeepAlive = m.DisableKeepAlive
-						view.Check.ExpectedStatus = m.ExpectedStatus
-						view.Check.BodyContains = m.BodyContains
-					}
-					if m.Type == "heartbeat" {
-						view.Check.MaxAge = m.MaxAge
-					}
-				}
-				views = append(views, view)
+				return
 			}
-			if page != nil {
-				writeJSON(w, struct {
-					Slug     string `json:"slug"`
-					Name     string `json:"name"`
-					Monitors []View `json:"monitors"`
-				}{page.Slug, page.Name, views})
-			} else {
-				writeJSON(w, views)
+			inc, e := s.incidents(r.Context(), m.ID)
+			if e != nil {
+				if r.Context().Err() == nil {
+					http.Error(w, "Storage unavailable", 503)
+				}
+				return
+			}
+
+			var uptime *float64
+			if total > 0 {
+				v := 100 * float64(up) / float64(total)
+				uptime = &v
+			}
+			if !m.recordsLatency() {
+				st.Latency = 0
+				for i := range buckets {
+					buckets[i].Latency = 0
+				}
+			}
+			view := View{WindowStart: start, WindowEnd: end, Buckets: buckets, ID: m.ID, Name: m.Name, State: st, Incidents: inc, Uptime: uptime, Samples: total}
+			if m.recordsLatency() && st.Checked != 0 {
+				latency := st.Latency
+				view.LatencyMS = &latency
+			}
+			if private {
+				view.Group = m.Group
+				view.Type = m.Type
+				target := m.Target
+				if m.Type == "heartbeat" {
+					target = "/api/heartbeat/" + m.ID
+				}
+				view.Check = &CheckInfo{Type: m.Type, Target: target, Description: m.Description, Interval: m.Interval, Timeout: m.Timeout, Failures: m.Failures, Successes: m.Successes}
+				if m.Type == "http" {
+					enabled := m.recordsLatency()
+					view.Check.RecordLatency = &enabled
+					view.Check.DisableKeepAlive = m.DisableKeepAlive
+					view.Check.ExpectedStatus = m.ExpectedStatus
+					view.Check.BodyContains = m.BodyContains
+				}
+				if m.Type == "heartbeat" {
+					view.Check.MaxAge = m.MaxAge
+				}
+			}
+			if r.Context().Err() == nil {
+				writeJSON(w, view)
 			}
 		}
 	}
 	mux.HandleFunc("GET /api/public", snapshot(false, nil))
+	mux.HandleFunc("GET /api/public/{id}", snapshot(false, nil))
 	mux.HandleFunc("GET /api/private", auth(snapshot(true, nil)))
+	mux.HandleFunc("GET /api/private/{id}", auth(snapshot(true, nil)))
 	mux.HandleFunc("GET /api/health", auth(func(w http.ResponseWriter, r *http.Request) {
 		h := Health{OK: true, Checked: time.Now().Unix()}
 		if c.Telegram.TokenEnv != "" {
@@ -230,14 +287,16 @@ func handler(c Config, s *Store) http.Handler {
 		}
 		return nil
 	}
-	mux.HandleFunc("GET /api/status/{slug}", func(w http.ResponseWriter, r *http.Request) {
+	pageSnapshot := func(w http.ResponseWriter, r *http.Request) {
 		p := findPage(r.PathValue("slug"))
 		if p == nil {
 			http.NotFound(w, r)
 			return
 		}
 		snapshot(false, p)(w, r)
-	})
+	}
+	mux.HandleFunc("GET /api/status/{slug}", pageSnapshot)
+	mux.HandleFunc("GET /api/status/{slug}/{id}", pageSnapshot)
 	mux.HandleFunc("GET /status/{slug}", func(w http.ResponseWriter, r *http.Request) {
 		p := findPage(r.PathValue("slug"))
 		if p == nil {

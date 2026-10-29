@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
@@ -14,7 +15,7 @@ func TestWindowCoverage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	buckets, total, up, err := s.windowHistory("web", 1000, 1240, 30)
+	buckets, total, up, err := s.windowHistory(context.Background(), "web", 1000, 1240, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,21 +45,20 @@ func TestWindowSelection(t *testing.T) {
 		hours int
 	}{{"", 24}, {"4h", 4}, {"24h", 24}, {"7d", 168}} {
 		r := httptest.NewRecorder()
-		h.ServeHTTP(r, httptest.NewRequest("GET", "/api/public?window="+tc.query, nil))
-		var views []View
+		h.ServeHTTP(r, httptest.NewRequest("GET", "/api/public/web?window="+tc.query, nil))
+		var v View
 		if r.Code != 200 {
 			t.Fatal(r.Code, r.Body.String())
 		}
-		if err := json.Unmarshal(r.Body.Bytes(), &views); err != nil {
+		if err := json.Unmarshal(r.Body.Bytes(), &v); err != nil {
 			t.Fatal(err)
 		}
-		v := views[0]
 		if v.WindowEnd-v.WindowStart != int64(tc.hours)*3600 || len(v.Buckets) != 240 || v.Uptime != nil {
 			t.Fatalf("bad window: %+v", v)
 		}
 	}
 	r := httptest.NewRecorder()
-	h.ServeHTTP(r, httptest.NewRequest("GET", "/api/public?window=365d", nil))
+	h.ServeHTTP(r, httptest.NewRequest("GET", "/api/public/web?window=365d", nil))
 	if r.Code != 400 {
 		t.Fatal("unbounded window accepted")
 	}
