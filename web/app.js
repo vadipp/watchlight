@@ -307,6 +307,22 @@ async function refreshList() {
     document.querySelector("#updated").textContent = "Connection lost · displayed statuses may be stale";
   } finally { listLoading = false; }
 }
+function healthIndicator(key, icon, description, state) {
+  const panel = document.querySelector("#delivery");
+  let indicator = panel.querySelector(`[data-health="${key}"]`);
+  if (!indicator) {
+    indicator = el("details", undefined, "health-indicator");
+    indicator.dataset.health = key;
+    indicator.append(el("summary"), el("span", undefined, "health-description"));
+    panel.append(indicator);
+  }
+  indicator.className = "health-indicator " + state;
+  const trigger = indicator.querySelector("summary");
+  trigger.textContent = icon;
+  trigger.title = description;
+  trigger.setAttribute("aria-label", description);
+  indicator.querySelector("span").textContent = description;
+}
 async function refreshHealth() {
   if (!privateView || healthLoading) return;
   healthLoading = true;
@@ -317,14 +333,24 @@ async function refreshHealth() {
     if (!r.ok && r.status !== 503) throw Error();
     const health = await r.json();
     const telegram = health.telegram ? health.telegram.ok ? "API reachable" : "API probe failing or pending" : "not configured";
-    panel.textContent = "Monitor engine: " + (health.ok ? "checks fresh" : "checks stale") + " · Telegram: " + telegram + " · Queued alerts: " + health.pending_notifications;
-  } catch { panel.textContent = "Unable to refresh engine health"; }
+    panel.querySelector('[data-health="error"]')?.remove();
+    healthIndicator("engine", "◉", "Monitor engine: " + (health.ok ? "checks fresh" : "checks stale"), health.ok ? "healthy" : "warning");
+    healthIndicator("telegram", "➤", "Telegram: " + telegram, health.telegram?.ok ? "healthy" : "warning");
+    healthIndicator("queue", "▤ " + health.pending_notifications, "Queued alerts: " + health.pending_notifications, health.pending_notifications ? "warning" : "healthy");
+  } catch {
+    panel.replaceChildren();
+    healthIndicator("error", "⚠", "Unable to refresh engine health", "warning");
+  }
   finally { healthLoading = false; }
 }
 window.addEventListener("pagehide", () => detailRequest?.controller.abort());
 
 if (privateView) {
+  document.body.classList.add("owner-view");
+  document.querySelector("#owner-title").hidden = false;
   document.querySelector("h1").textContent = "Owner dashboard";
+  document.querySelector('nav a[href="/dashboard"]').hidden = true;
+  document.title = "Watchlight | Owner dashboard";
   document.querySelector("aside").classList.add("grouped");
 }
 refreshList();
