@@ -53,13 +53,21 @@ are rejected. Changes take effect after validation and restart.
 A failure threshold must be reached before going down; the success threshold
 must be reached before recovery. An initial down event alerts; initial successful
 startup does not. Missing scheduler progress appears as unknown, never healthy.
-Historical chart gaps are shown between observations. The current UI shows the
-latest 240 results, 24-hour observed success percentage and 30 recent transitions.
-The history strip groups results into up to 60 blocks to fit the screen. A block
-with any failed check is red; otherwise a monitoring gap makes it gray. Hover a
-block for its time range and check/failure counts.
-This percentage is sample-based, not a wall-clock availability SLA; unobserved
-intervals do not count as successes.
+The grouped window selector offers 4 hours, 24 hours (default), and 7 days.
+Observed uptime, history and response-time plots share that exact rolling window;
+timestamps use dd.mm.yyyy and 24-hour local time. The API accepts
+`?window=4h`, `24h`, or `7d` and returns explicit window boundaries plus
+240 time buckets. The legacy latest-240-results history remains available.
+The strip combines buckets into up to 60 equal-duration bars. Each bar stacks
+green (successful coverage), red (failed coverage), and grey (unknown time).
+A check covers at most one configured interval, ending earlier if another check
+arrives; remaining time, including missing history, is unknown. Hover, focus or
+tap a bar for its interval, check/failure counts and coverage percentages.
+Uptime remains the successful-check percentage, excluding unknown time; bar
+segments are duration-based. This is not a wall-clock availability SLA.
+Response-time points are bucket means. Recent status transitions retain their
+separate threshold-based semantics and are not filtered by the window selector.
+Raw retention shorter than the selected window appears as unknown coverage.
 
 ## Notifications
 

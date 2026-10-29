@@ -1,6 +1,8 @@
 "use strict";
 const privateView = location.pathname === "/dashboard";
 const statusSlug = location.pathname.startsWith("/status/") ? location.pathname.slice(8) : null;
+let selectedWindow = "24h";
+let refreshSequence = 0;
 let selected = null,
   views = [];
 const expandedGroups = new Map();
@@ -10,7 +12,10 @@ const el = (tag, text, cls) => {
   if (cls) n.className = cls;
   return n;
 };
-const fmt = (t) => new Date(t * 1000).toLocaleString();
+const fmt = (t) => {
+ const d = new Date(t * 1000), pad = n => String(n).padStart(2, "0");
+ return `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
 const milliseconds = (value) => new Intl.NumberFormat(undefined, {
   maximumSignificantDigits: 3,
 }).format(value) + " ms";
@@ -88,10 +93,20 @@ function render() {
     return;
   }
   detail.append(el("h2", v.name));
+  const selector = el("div", undefined, "window-selector");
+  selector.setAttribute("role", "group");
+  selector.setAttribute("aria-label", "History window");
+  for (const [key, label] of [["4h", "4 hours"], ["24h", "24 hours"], ["7d", "7 days"]]) {
+    const button = el("button", label);
+    button.setAttribute("aria-pressed", String(key === selectedWindow));
+    button.onclick = () => { selectedWindow = key; refresh(); };
+    selector.append(button);
+  }
+  detail.append(selector);
   const metrics = el("div", undefined, "metrics");
   for (const [label, value] of [
     [
-      "Observed uptime · 24h",
+      `Observed uptime · ${Math.round((v.window_end-v.window_start)/3600) === 168 ? "7d" : Math.round((v.window_end-v.window_start)/3600)+"h"}`,
       v.uptime === null ? "—" : v.uptime.toFixed(2) + "%",
     ],
     ...(v.latency_ms !== null && v.type !== "heartbeat" ? [["Response time", milliseconds(v.latency_ms)]] : []),
@@ -102,45 +117,39 @@ function render() {
     metrics.append(m);
   }
   detail.append(metrics);
-  const h = [...v.history].reverse();
-  const deltas = h.slice(1).map((p, i) => p.time - h[i].time).filter((d) => d > 0).sort((a, b) => a - b);
-  const cadence = v.interval_seconds || deltas[Math.floor(deltas.length / 2)] || 0;
+  const h = v.buckets.filter(b => b.checks > 0).map(b => ({time: (b.time+b.end)/2, latency: b.latency}));
   const section = el("div", undefined, "section");
-  const historyLabel = el("div", undefined, "label");
+  const historyLabel = el("div", `${v.samples} observed checks · green: up · red: down · grey: unknown`, "label");
   section.append(historyLabel);
   const bars = el("div", undefined, "bars");
-  const observations = [];
-  let prev = null;
-  for (const p of h) {
-    if (prev && cadence && p.time - prev.time > cadence * 1.5) {
-      observations.push({ time: prev.time, gap: true });
-    }
-    observations.push(p);
-    prev = p;
-  }
+  const tooltip = el("p", "Tap a bar for details.", "label bar-details");
   bars.drawBars = (width) => {
-    // Keep blocks at least 8px wide with 4px gutters, even on phones.
-    const count = Math.min(60, Math.max(1, Math.floor((width + 4) / 12)));
-    const size = Math.max(1, Math.ceil(observations.length / count));
-    historyLabel.textContent = `Recent checks · ${h.length} observations${size > 1 ? " · grouped" : ""}`;
+    const capacity = Math.min(60, Math.max(1, Math.floor((width + 4) / 12)));
+    const count = [60,48,40,30,24,20,16,15,12,10,8,6,5,4,3,2,1].find(n => n <= capacity);
     bars.replaceChildren();
-    for (let i = 0; i < observations.length; i += size) {
-      const group = observations.slice(i, i + size);
-      const failures = group.filter((p) => !p.gap && !p.ok).length;
-      const gap = group.some((p) => p.gap);
-      const status = failures ? "down" : gap ? "unknown" : "up";
-      const bar = el("span", undefined, "bar " + status);
-      bar.title = `${fmt(group[0].time)} – ${fmt(group[group.length - 1].time)} · ${group.filter((p) => !p.gap).length} checks · ${failures} failures${gap ? " · monitoring gap" : ""}`;
+    for (let i = 0; i < count; i++) {
+      const group = v.buckets.slice(Math.floor(i*240/count), Math.floor((i+1)*240/count));
+      const duration = group[group.length-1].end-group[0].time;
+      const sum = key => group.reduce((n,b) => n+b[key],0);
+      const up = sum("up"), down = sum("down"), unknown = Math.max(0,duration-up-down);
+      const bar = el("button", undefined, "bar");
+      const description = `${fmt(group[0].time)} – ${fmt(group[group.length-1].end)} · ${sum("checks")} checks · ${sum("failures")} failures · up ${(100*up/duration).toFixed(2)}% · down ${(100*down/duration).toFixed(2)}% · unknown ${(100*unknown/duration).toFixed(2)}%`;
+      bar.title = description;
+      bar.setAttribute("aria-label", description);
+      bar.onclick = bar.onfocus = () => { tooltip.textContent = description; };
+      for (const [status, amount] of [["up",up],["down",down],["unknown",unknown]]) {
+        if (amount <= 0) continue;
+        const segment = el("span", undefined, "bar-segment "+status);
+        segment.style.flexGrow = amount;
+        bar.append(segment);
+      }
       bars.append(bar);
     }
   };
-  section.append(bars);
+  section.append(bars, tooltip);
   historyObserver.observe(bars);
   const times = el("div", undefined, "times");
-  times.append(
-    el("span", h.length ? fmt(h[0].time) : "No observations"),
-    el("span", h.length ? fmt(h[h.length - 1].time) : ""),
-  );
+  times.append(el("span", fmt(v.window_start)), el("span", fmt(v.window_end)));
   section.append(times);
   if (h.length > 1 && v.latency_ms !== null && v.type !== "heartbeat") {
     const ns = "http://www.w3.org/2000/svg",
@@ -152,7 +161,7 @@ function render() {
     const observedMax = Math.max(0, ...h.map((p) => p.latency));
     const max = chartCeiling(observedMax);
     const observedMin = Math.min(...h.map((p) => p.latency));
-    svg.setAttribute("aria-label", `Response time chart. Scale: 0 to ${milliseconds(max)}. Observed range: ${milliseconds(observedMin)} to ${milliseconds(observedMax)}.`);
+    svg.setAttribute("aria-label", `Response time chart. Scale: 0 to ${milliseconds(max)}. Observed bucket mean range: ${milliseconds(observedMin)} to ${milliseconds(observedMax)}.`);
     const chart = el("div", undefined, "response-chart");
     const axis = el("div", undefined, "chart-axis");
     axis.setAttribute("aria-hidden", "true");
@@ -166,22 +175,24 @@ function render() {
       grid.classList.add("chart-grid");
       svg.append(grid);
     }
-    const line = document.createElementNS(ns, "polyline"),
-      title = document.createElementNS(ns, "title");
-    title.textContent = `Observed response times: ${milliseconds(observedMin)} – ${milliseconds(observedMax)}`;
+    const title = document.createElementNS(ns, "title");
+    title.textContent = `Observed bucket mean response times: ${milliseconds(observedMin)} – ${milliseconds(observedMax)}`;
     svg.append(title);
-    line.setAttribute(
-      "points",
-      h
-        .map(
-          (p, i) =>
-            `${(i / (h.length - 1)) * 600},${120 - (p.latency / max) * 110}`,
-        )
-        .join(" "),
-    );
-    svg.append(line);
+    let run = [];
+    const flush = () => {
+      if (!run.length) return;
+      const line = document.createElementNS(ns, "polyline");
+      line.setAttribute("points", run.join(" "));
+      svg.append(line);
+      run = [];
+    };
+    for (const b of v.buckets) {
+      if (!b.checks) { flush(); continue; }
+      run.push(`${(((b.time+b.end)/2-v.window_start)/(v.window_end-v.window_start))*600},${120-(b.latency/max)*110}`);
+    }
+    flush();
     chart.append(axis, svg);
-    section.append(chart, el("div", `Observed range: ${milliseconds(observedMin)} – ${milliseconds(observedMax)}`, "label chart-range"));
+    section.append(chart, el("div", `Observed bucket mean range: ${milliseconds(observedMin)} – ${milliseconds(observedMax)}`, "label chart-range"));
   }
   detail.append(section);
   if (privateView && v.state.error)
@@ -199,7 +210,7 @@ function render() {
     incidents,
     el(
       "p",
-      `Last check: ${v.state.checked ? fmt(v.state.checked) : "never"} · ${v.samples} observed checks in 24 hours`,
+      `Last check: ${v.state.checked ? fmt(v.state.checked) : "never"} · ${v.samples} observed checks in the selected window`,
       "label",
     ),
   );
@@ -225,12 +236,15 @@ function render() {
   }
 }
 async function refresh() {
+  const sequence = ++refreshSequence;
   try {
-    const r = await fetch(privateView ? "/api/private" : statusSlug ? "/api/status/" + encodeURIComponent(statusSlug) : "/api/public", {
+    const endpoint = privateView ? "/api/private" : statusSlug ? "/api/status/" + encodeURIComponent(statusSlug) : "/api/public";
+    const r = await fetch(endpoint + "?window=" + selectedWindow, {
       cache: "no-store",
     });
     if (!r.ok) throw Error();
     const data = await r.json();
+    if (sequence !== refreshSequence) return;
     views = statusSlug ? data.monitors : data;
     if (privateView) {
       const healthResponse = await fetch("/api/health", { cache: "no-store" });
@@ -250,10 +264,12 @@ async function refresh() {
         " · Queued alerts: " +
         health.pending_notifications;
     }
+    if (sequence !== refreshSequence) return;
     document.querySelector("#updated").textContent =
-      "Updated " + new Date().toLocaleTimeString();
+      "Updated " + fmt(Date.now()/1000);
     render();
   } catch {
+    if (sequence !== refreshSequence) return;
     document.querySelector("#summary").textContent =
       "Unable to refresh monitoring data";
     document.querySelector("#summary").className = "summary unknown";

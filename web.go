@@ -19,18 +19,21 @@ import (
 var assets embed.FS
 
 type View struct {
-	Check           *CheckInfo `json:"check,omitempty"`
-	LatencyMS       *float64   `json:"latency_ms"`
-	Group           string     `json:"group,omitempty"`
-	IntervalSeconds float64    `json:"interval_seconds,omitempty"`
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	Type            string     `json:"type,omitempty"`
-	State           State      `json:"state"`
-	History         []Point    `json:"history"`
-	Incidents       []Incident `json:"incidents"`
-	Uptime          *float64   `json:"uptime"`
-	Samples         int        `json:"samples"`
+	WindowStart     int64          `json:"window_start"`
+	WindowEnd       int64          `json:"window_end"`
+	Buckets         []WindowBucket `json:"buckets"`
+	Check           *CheckInfo     `json:"check,omitempty"`
+	LatencyMS       *float64       `json:"latency_ms"`
+	Group           string         `json:"group,omitempty"`
+	IntervalSeconds float64        `json:"interval_seconds,omitempty"`
+	ID              string         `json:"id"`
+	Name            string         `json:"name"`
+	Type            string         `json:"type,omitempty"`
+	State           State          `json:"state"`
+	History         []Point        `json:"history"`
+	Incidents       []Incident     `json:"incidents"`
+	Uptime          *float64       `json:"uptime"`
+	Samples         int            `json:"samples"`
 }
 
 // Explicit allowlist: credentials and secret environment names never belong here.
@@ -70,6 +73,19 @@ func handler(c Config, s *Store) http.Handler {
 	}
 	snapshot := func(private bool, page *StatusPage) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			hours := 24
+			switch r.URL.Query().Get("window") {
+			case "", "24h":
+			case "4h":
+				hours = 4
+			case "7d":
+				hours = 168
+			default:
+				http.Error(w, "Invalid window", 400)
+				return
+			}
+			end := time.Now().Unix()
+			start := end - int64(hours)*3600
 			views := []View{}
 			members := map[string]bool{}
 			if page != nil {
@@ -88,7 +104,12 @@ func handler(c Config, s *Store) http.Handler {
 				if !private {
 					st.Error = ""
 				}
-				h, e := s.history(m.ID)
+				buckets, total, up, e := s.windowHistory(m.ID, start, end, duration(m.Interval).Seconds())
+				h, historyErr := s.history(m.ID)
+				if historyErr != nil {
+					http.Error(w, "Storage unavailable", 503)
+					return
+				}
 				if e != nil {
 					http.Error(w, "Storage unavailable", 503)
 					return
@@ -98,8 +119,7 @@ func handler(c Config, s *Store) http.Handler {
 					http.Error(w, "Storage unavailable", 503)
 					return
 				}
-				var total, up int
-				s.QueryRow("SELECT count(*),coalesce(sum(ok),0) FROM results WHERE id=? AND time>=?", m.ID, time.Now().Add(-24*time.Hour).Unix()).Scan(&total, &up)
+
 				var uptime *float64
 				if total > 0 {
 					v := 100 * float64(up) / float64(total)
@@ -107,11 +127,14 @@ func handler(c Config, s *Store) http.Handler {
 				}
 				if !m.recordsLatency() {
 					st.Latency = 0
+					for i := range buckets {
+						buckets[i].Latency = 0
+					}
 					for i := range h {
 						h[i].Latency = 0
 					}
 				}
-				view := View{ID: m.ID, Name: m.Name, State: st, History: h, Incidents: inc, Uptime: uptime, Samples: total}
+				view := View{WindowStart: start, WindowEnd: end, Buckets: buckets, ID: m.ID, Name: m.Name, State: st, History: h, Incidents: inc, Uptime: uptime, Samples: total}
 				if m.recordsLatency() && st.Checked != 0 {
 					latency := st.Latency
 					view.LatencyMS = &latency

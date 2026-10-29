@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
       ok: i !== 60, latency: 1 + i % 7,
     })).reverse();
     const monitor = {
+      latency_ms: 1,
       id: 'web', name: 'Public website', type: 'http', interval_seconds: 30,
       uptime: 99.88, samples: 859,
       state: { status: 'up', checked: history[0].time, latency: 1 },
@@ -21,6 +22,15 @@ const assert = require('node:assert/strict');
     };
     await page.route('http://watchlight.test/**', route => {
       const url = new URL(route.request().url());
+      const end = history[0].time+30, start = end - ({'4h':4,'24h':24,'7d':168}[url.searchParams.get('window')] || 24)*3600;
+      monitor.window_start=start; monitor.window_end=end;
+      monitor.buckets=Array.from({length:240},(_,i)=>{
+        const time=start+(end-start)*i/240, finish=start+(end-start)*(i+1)/240;
+        const points=history.filter(p=>p.time>=time && p.time<finish);
+        let up=0,down=0;
+        for(const p of history) {const coverage=Math.max(0,Math.min(finish,p.time+30)-Math.max(time,p.time)); if(p.ok)up+=coverage;else down+=coverage;}
+        return {time,end:finish,checks:points.length,failures:points.filter(p=>!p.ok).length,up,down,latency:points.length?points.reduce((n,p)=>n+p.latency,0)/points.length:0};
+      });
       if (url.pathname === '/api/health') return route.fulfill({json:{ok:true,pending_notifications:0}});
       if (url.pathname === '/api/private') return route.fulfill({json:
         ['Operations','Websites','Services','Public'].flatMap((group,g) => Array.from({length: g === 0 ? 36 : 3}, (_,i) => ({...monitor, id:`${g}-${i}`,name:`${group} service ${i}`,group, state:{...monitor.state,status:i===2?'down':'up'}, check:{type:'http',target:'https://internal.example.test/health',description:'A local service probe',interval:'30s',timeout:'10s',failures:3,successes:1,expected_status:200}})))
@@ -56,14 +66,20 @@ const assert = require('node:assert/strict');
       assert(result.right <= result.detailRight, `history overflow at ${width}`);
       assert(result.count <= 60 && result.min >= 8, `dense bars at ${width}: ${JSON.stringify(result)}`);
       assert.equal(result.failures, 1, `failure lost at ${width}`);
-      assert.equal(result.gaps, 1, `gap lost at ${width}`);
+      assert(result.gaps >= 1, `gap lost at ${width}`);
       assert.equal(result.aspect, 'none');
       console.log(`${width}px: ${result.count} blocks, minimum width ${result.min.toFixed(1)}px`);
     }
     assert.equal(await page.locator('.service-group').count(), 0, 'owner groups leaked into public UI');
     assert.equal(await page.locator('.technical').count(), 0, 'technical panel exposed publicly');
-    assert.deepEqual(await page.locator('.chart-axis span').allTextContents(), ['10 ms','5 ms','0 ms']);
-    assert.match(await page.locator('.chart-range').textContent(), /1 ms – 7 ms/);
+    assert.deepEqual(await page.locator('.chart-axis span').allTextContents(), ['5 ms','2.5 ms','0 ms']);
+    await page.getByRole('button', {name:'4 hours',exact:true}).click();
+    await page.waitForFunction(() => document.querySelector('.window-selector button').getAttribute('aria-pressed') === 'true');
+    await page.locator('.bar').first().click();
+    assert.match(await page.locator('.bar-details').textContent(), /unknown/);
+    assert.match(await page.locator('.times').textContent(), /\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}/);
+    await page.getByRole('button', {name:'7 days',exact:true}).click();
+    await page.waitForFunction(() => document.querySelector('.metric span').textContent.includes('7d'));
     assert.equal(await page.locator('.chart-grid').count(), 3);
     await page.goto('http://watchlight.test/dashboard');
     await page.waitForSelector('.service-group');
@@ -87,7 +103,7 @@ const assert = require('node:assert/strict');
     await page.goto('http://watchlight.test/');
     await page.waitForSelector('.chart-axis');
     assert.deepEqual(await page.locator('.chart-axis span').allTextContents(), ['1 ms','0.5 ms','0 ms']);
-    assert.equal(await page.locator('.chart-range').textContent(), 'Observed range: 0 ms – 0 ms');
+    assert.equal(await page.locator('.chart-range').textContent(), 'Observed bucket mean range: 0 ms – 0 ms');
     // Sub-millisecond data must not round all scale labels to zero.
     history.forEach(p => { p.latency = 0.025; });
     await page.reload();

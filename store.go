@@ -216,3 +216,79 @@ func (s *Store) setMeta(key string, v any) error {
 	_, e = s.Exec("INSERT INTO metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(b))
 	return e
 }
+
+// WindowBucket bounds the response size independently of check cadence.
+type WindowBucket struct {
+	Time     int64   `json:"time"`
+	End      int64   `json:"end"`
+	Checks   int     `json:"checks"`
+	Failures int     `json:"failures"`
+	Up       float64 `json:"up"`
+	Down     float64 `json:"down"`
+	Latency  float64 `json:"latency"`
+}
+
+func (s *Store) windowHistory(id string, start, end int64, cadence float64) ([]WindowBucket, int, int, error) {
+	const count = 240
+	width := float64(end-start) / count
+	buckets := make([]WindowBucket, count)
+	for i := range buckets {
+		buckets[i].Time = start + int64(float64(i)*width)
+		buckets[i].End = start + int64(float64(i+1)*width)
+	}
+	rows, err := s.Query("SELECT time,ok,latency FROM results WHERE id=? AND time>=? AND time<=? ORDER BY time", id, start-int64(cadence)-1, end)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	total, successes := 0, 0
+	var previous *Point
+	addCoverage := func(p Point, until float64) {
+		left := max(float64(start), float64(p.Time))
+		right := min(float64(end), float64(p.Time)+cadence, until)
+		for left < right {
+			index := min(count-1, int((left-float64(start))/width))
+			stop := min(right, float64(buckets[index].End))
+			if stop <= left {
+				break
+			}
+			if p.OK {
+				buckets[index].Up += stop - left
+			} else {
+				buckets[index].Down += stop - left
+			}
+			left = stop
+		}
+	}
+	for rows.Next() {
+		var point Point
+		if err := rows.Scan(&point.Time, &point.OK, &point.Latency); err != nil {
+			return nil, 0, 0, err
+		}
+		if previous != nil {
+			addCoverage(*previous, float64(point.Time))
+		}
+		previous = &point
+		if point.Time < start {
+			continue
+		}
+		index := min(count-1, int(float64(point.Time-start)/width))
+		buckets[index].Checks++
+		buckets[index].Latency += point.Latency
+		total++
+		if point.OK {
+			successes++
+		} else {
+			buckets[index].Failures++
+		}
+	}
+	if previous != nil {
+		addCoverage(*previous, float64(end))
+	}
+	for i := range buckets {
+		if buckets[i].Checks > 0 {
+			buckets[i].Latency /= float64(buckets[i].Checks)
+		}
+	}
+	return buckets, total, successes, rows.Err()
+}
