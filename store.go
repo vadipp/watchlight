@@ -155,14 +155,14 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 			return e
 		}
 		if notify && !snoozed && (v.Status == "down" || old == "down") {
-			body := "Watchlight: " + m.Name + " is " + v.Status
+			body := notificationBody(m, v.Status, lat, detail)
 			if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", body, now); e != nil {
 				return e
 			}
 		}
 	}
 	if notify && recovered {
-		if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", "Watchlight: "+m.Name+" recovered and is visible again", now); e != nil {
+		if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", notificationBody(m, "up", lat, detail)+"; recovered and is visible again", now); e != nil {
 			return e
 		}
 	}

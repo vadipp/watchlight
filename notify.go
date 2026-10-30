@@ -15,6 +15,21 @@ import (
 	"time"
 )
 
+func notificationBody(m Monitor, status string, latency float64, detail string) string {
+	label := "🔴 Down"
+	if status == "up" {
+		label = "✅ Up"
+		if m.recordsLatency() {
+			detail = fmt.Sprintf("%.0f ms", latency)
+		} else {
+			detail = "Check passed"
+		}
+	} else if strings.TrimSpace(detail) == "" {
+		detail = "Check failed"
+	}
+	return fmt.Sprintf("[%s] [%s] %s", m.Name, label, strings.Join(strings.Fields(detail), " "))
+}
+
 func newTelegramClient(relay string) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if relay != "" {
