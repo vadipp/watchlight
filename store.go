@@ -316,11 +316,13 @@ func (s *Store) windowHistory(ctx context.Context, id string, start, end int64, 
 			if stop <= left {
 				break
 			}
-			coverage := stop - left - maintenanceOverlap(intervals, left, stop)
+			overlap := maintenanceOverlap(intervals, left, stop)
 			if p.OK {
-				buckets[index].Up += coverage
+				// Successful coverage stays green, including inside maintenance.
+				buckets[index].Up += stop - left
+				buckets[index].Maintenance -= overlap
 			} else {
-				buckets[index].Down += coverage
+				buckets[index].Down += stop - left - overlap
 			}
 			left = stop
 		}

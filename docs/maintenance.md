@@ -72,10 +72,12 @@ state and maintenance duration per bucket. Private reason/source/operation IDs
 are restricted to owner routes. Owner details include the intersecting records.
 Public visibility and status-page membership still apply.
 
-The segmented strip uses blue (#388bfd) for maintenance duration, green/red for
-successful/failed coverage outside maintenance and grey for remaining unknown
-time. Overlapping windows never double count; maintenance also covers monitoring
-gaps. A two-pixel minimum keeps a short blue segment visible in wide windows;
+The segmented strip keeps all successful coverage green, including inside
+maintenance windows. Blue (#388bfd) replaces only failed or unknown coverage
+inside maintenance; failures outside maintenance remain red and other unknown
+time remains grey. Overlapping windows never double count. The blue duration
+therefore measures non-successful coverage during maintenance, not the full
+maintenance window. A two-pixel minimum keeps a short blue segment visible in wide windows;
 hover/focus/tap percentages show the actual duration share. Raw failure counts
 and observed uptime remain unmodified, including checks during maintenance; the
 strip is duration-based, while uptime is check-based. This distinction is

@@ -74,7 +74,8 @@ aggregation, so disconnected clients can stop obsolete read work.
 
 The strip combines buckets into up to 60 equal-duration bars. Each bar stacks
 green (successful coverage), red (failed coverage), grey (unknown time), and blue
-(planned maintenance). Maintenance coverage takes precedence over other colours.
+(failed or unknown coverage during planned maintenance). Successful coverage
+always remains green, including inside a maintenance window.
 A check covers at most one configured interval, ending earlier if another check
 arrives; remaining time, including missing history, is unknown. Hover, focus or
 tap a bar for its interval, check/failure counts and coverage percentages.

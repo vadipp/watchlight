@@ -209,7 +209,7 @@ func TestMaintenanceCoverageUnionAndPersistence(t *testing.T) {
 			t.Fatal("overlap", b)
 		}
 	}
-	if good != 30 || bad != 0 || blue != 120 || total != 2 || up != 1 {
+	if good != 50 || bad != 0 || blue != 100 || total != 2 || up != 1 {
 		t.Fatal(fmt.Sprint(good, bad, blue, total, up))
 	}
 	// Completed windows stop covering at their effective end; expiry stays auditable.
@@ -238,5 +238,46 @@ func TestMaintenanceAlertBaselineRespectsConfigurationReset(t *testing.T) {
 	s.QueryRow("SELECT count(*) FROM outbox").Scan(&n)
 	if n != 1 || s.state(m.ID).Status != "unknown" {
 		t.Fatal("configuration reset produced a spurious recovery", n)
+	}
+}
+
+func TestMaintenanceKeepsSuccessfulCoverageGreen(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		samples          bool
+		ok               bool
+		green, red, blue float64
+	}{
+		{"successful", true, true, 240, 0, 0},
+		{"failed", true, false, 0, 120, 120},
+		{"unknown", false, false, 0, 0, 120},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testStore(t)
+			maintenanceFixture(t, s, "web", "release", 1040, 1160)
+			if tc.samples {
+				for at := int64(990); at < 1240; at += 30 {
+					if _, err := s.Exec("INSERT INTO results VALUES(?,?,?,?)", "web", at, tc.ok, 0); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			buckets, _, _, err := s.windowHistory(context.Background(), "web", 1000, 1240, 30)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var green, red, blue float64
+			for _, b := range buckets {
+				green += b.Up
+				red += b.Down
+				blue += b.Maintenance
+				if b.Maintenance < 0 || b.Up+b.Down+b.Maintenance > float64(b.End-b.Time) {
+					t.Fatal("invalid coverage", b)
+				}
+			}
+			if green != tc.green || red != tc.red || blue != tc.blue {
+				t.Fatalf("green/red/blue=%v/%v/%v want %v/%v/%v", green, red, blue, tc.green, tc.red, tc.blue)
+			}
+		})
 	}
 }

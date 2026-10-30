@@ -46,3 +46,8 @@ completion, blue segment RGB, private audit visibility, public metadata isolatio
 and mobile width. Runtime RSS in the small synthetic fixture was about 8 MiB.
 Browser dependencies/fonts were unpacked locally under /tmp; no production
 packages or services were changed.
+
+Maintenance colour refinement (2026-10-30): successful coverage stays green
+inside maintenance; blue replaces only failed/unknown coverage. Regression cases
+cover fully successful, fully failed, unobserved and mixed overlapping windows.
+The real-binary smoke verifies green before a synthetic failure and blue afterward.

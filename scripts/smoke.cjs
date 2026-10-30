@@ -10,8 +10,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "watchlight-smoke-"));
   let proc, browser, fixture;
   const errors = [];
+  let fixtureOK = true;
   try {
-    fixture = http.createServer((q, r) => r.end("healthy"));
+    fixture = http.createServer((q, r) => {r.statusCode = fixtureOK ? 200 : 503; r.end(fixtureOK ? "healthy" : "maintenance");});
     await new Promise((r) => fixture.listen(0, "127.0.0.1", r));
     const target = fixture.address().port;
     const probe = http.createServer();
@@ -157,8 +158,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     response = await fetch(base + maintenancePath, {method: "PUT", headers: {...auth, "Content-Type": "application/json"}, body});
     assert(response.status === 200 && (await response.json()).expires_at === planned.expires_at, "maintenance retry extended deadline");
     await sleep(1200);
-    const maintenanceDetail = await (await fetch(base + "/api/public/web")).json();
-    assert(maintenanceDetail.maintenance_active && maintenanceDetail.buckets.some(b => b.maintenance > 0), "maintenance history missing");
+    let maintenanceDetail = await (await fetch(base + "/api/public/web")).json();
+    assert(maintenanceDetail.maintenance_active && maintenanceDetail.buckets.every(b => b.maintenance === 0), "healthy maintenance coverage did not stay green");
+    fixtureOK = false;
+    await sleep(2200);
+    maintenanceDetail = await (await fetch(base + "/api/public/web")).json();
+    assert(maintenanceDetail.buckets.some(b => b.maintenance > 0), "failed maintenance coverage did not turn blue");
     assert(!JSON.stringify(maintenanceDetail).includes("Example software update"), "maintenance reason leaked publicly");
     if (browser) {
       const maintenanceContext = await browser.newContext({httpCredentials: {username: "owner", password}, viewport: {width: 1100,height: 900}});
