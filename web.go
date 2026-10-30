@@ -19,27 +19,31 @@ import (
 var assets embed.FS
 
 type View struct {
-	WindowStart int64          `json:"window_start"`
-	WindowEnd   int64          `json:"window_end"`
-	Buckets     []WindowBucket `json:"buckets"`
-	Check       *CheckInfo     `json:"check,omitempty"`
-	LatencyMS   *float64       `json:"latency_ms"`
-	Group       string         `json:"group,omitempty"`
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Type        string         `json:"type,omitempty"`
-	State       State          `json:"state"`
-	Incidents   []Incident     `json:"incidents"`
-	Uptime      *float64       `json:"uptime"`
-	Samples     int            `json:"samples"`
+	HeartbeatReceivedAt int64          `json:"heartbeat_received_at,omitempty"`
+	Maintenance         []Maintenance  `json:"maintenance,omitempty"`
+	MaintenanceActive   bool           `json:"maintenance_active"`
+	WindowStart         int64          `json:"window_start"`
+	WindowEnd           int64          `json:"window_end"`
+	Buckets             []WindowBucket `json:"buckets"`
+	Check               *CheckInfo     `json:"check,omitempty"`
+	LatencyMS           *float64       `json:"latency_ms"`
+	Group               string         `json:"group,omitempty"`
+	ID                  string         `json:"id"`
+	Name                string         `json:"name"`
+	Type                string         `json:"type,omitempty"`
+	State               State          `json:"state"`
+	Incidents           []Incident     `json:"incidents"`
+	Uptime              *float64       `json:"uptime"`
+	Samples             int            `json:"samples"`
 }
 
 type MonitorSummary struct {
-	Hidden bool   `json:"hidden,omitempty"`
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Group  string `json:"group,omitempty"`
-	State  struct {
+	Maintenance bool   `json:"maintenance"`
+	Hidden      bool   `json:"hidden,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Group       string `json:"group,omitempty"`
+	State       struct {
 		Status string `json:"status"`
 	} `json:"state"`
 }
@@ -79,9 +83,15 @@ func handler(c Config, s *Store) http.Handler {
 			next(w, r)
 		}
 	}
+	maintenanceRoutes(mux, c, s, auth)
 	snapshot := func(private bool, page *StatusPage) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			detailID := r.PathValue("id")
+			active, err := s.activeMaintenance(r.Context(), time.Now().Unix())
+			if err != nil {
+				http.Error(w, "Storage unavailable", 503)
+				return
+			}
 			hidden, err := s.snoozesContext(r.Context())
 			if err != nil {
 				http.Error(w, "Storage unavailable", 503)
@@ -126,7 +136,7 @@ func handler(c Config, s *Store) http.Handler {
 					if !allowed(m) {
 						continue
 					}
-					v := MonitorSummary{ID: m.ID, Name: m.Name}
+					v := MonitorSummary{ID: m.ID, Name: m.Name, Maintenance: active[m.ID]}
 					v.State.Status = status(m, states[m.ID]).Status
 					if private {
 						v.Group = m.Group
@@ -205,13 +215,25 @@ func handler(c Config, s *Store) http.Handler {
 					buckets[i].Latency = 0
 				}
 			}
-			view := View{WindowStart: start, WindowEnd: end, Buckets: buckets, ID: m.ID, Name: m.Name, State: st, Incidents: inc, Uptime: uptime, Samples: total}
+			view := View{MaintenanceActive: active[m.ID], WindowStart: start, WindowEnd: end, Buckets: buckets, ID: m.ID, Name: m.Name, State: st, Incidents: inc, Uptime: uptime, Samples: total}
 			if m.recordsLatency() && st.Checked != 0 {
 				latency := st.Latency
 				view.LatencyMS = &latency
 			}
 			if private {
+				view.Maintenance, e = s.maintenanceHistory(r.Context(), m.ID, start, end)
+				if e != nil {
+					http.Error(w, "Storage unavailable", 503)
+					return
+				}
 				view.Group = m.Group
+				if m.Type == "heartbeat" {
+					e = s.QueryRowContext(r.Context(), "SELECT coalesce((SELECT time FROM heartbeats WHERE id=?),0)", m.ID).Scan(&view.HeartbeatReceivedAt)
+					if e != nil {
+						http.Error(w, "Storage unavailable", 503)
+						return
+					}
+				}
 				view.Type = m.Type
 				target := m.Target
 				if m.Type == "heartbeat" {

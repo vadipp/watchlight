@@ -26,3 +26,23 @@ Headless Chromium checks also pass for public/private dashboard contents, servic
 selection, JavaScript execution and absence of horizontal overflow at a 390-pixel
 viewport. The final two-monitor smoke run sampled 12,340 KiB RSS. These functional
 browser checks are not a full visual review or sustained-load benchmark.
+
+## Planned maintenance — 2026-10-30
+
+Go tests and vet pass, including persistence across primary restart, bounded
+JSON API validation/authentication, idempotent operations, no public metadata
+leaks, union coverage through monitoring gaps, snooze interaction, configuration
+reset and overdue failure notifications. The static executable builds.
+
+A mocked HA restart helper verifies that invalid configuration or unconfirmed
+maintenance prevents restarting, and successful recovery completes the operation
+once. No real Home Assistant restart is needed to test this feature.
+
+Race instrumentation is unavailable in the current build container (CGO is
+disabled and no C compiler is installed); it is not reported as passing.
+
+Real-binary Chromium smoke passed: public/private views, API creation/retry/early
+completion, blue segment RGB, private audit visibility, public metadata isolation
+and mobile width. Runtime RSS in the small synthetic fixture was about 8 MiB.
+Browser dependencies/fonts were unpacked locally under /tmp; no production
+packages or services were changed.

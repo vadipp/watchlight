@@ -149,6 +149,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         "Browser: public/private views, selection, mobile width and JavaScript passed",
       );
     }
+    const maintenancePath = "/api/maintenance/web/smoke-release";
+    const body = JSON.stringify({reason: "Example software update", source: "smoke", duration_seconds: 300});
+    let response = await fetch(base + maintenancePath, {method: "PUT", headers: {...auth, "Content-Type": "application/json"}, body});
+    assert(response.status === 201, "maintenance create failed");
+    const planned = await response.json();
+    response = await fetch(base + maintenancePath, {method: "PUT", headers: {...auth, "Content-Type": "application/json"}, body});
+    assert(response.status === 200 && (await response.json()).expires_at === planned.expires_at, "maintenance retry extended deadline");
+    await sleep(1200);
+    const maintenanceDetail = await (await fetch(base + "/api/public/web")).json();
+    assert(maintenanceDetail.maintenance_active && maintenanceDetail.buckets.some(b => b.maintenance > 0), "maintenance history missing");
+    assert(!JSON.stringify(maintenanceDetail).includes("Example software update"), "maintenance reason leaked publicly");
+    if (browser) {
+      const maintenanceContext = await browser.newContext({httpCredentials: {username: "owner", password}, viewport: {width: 1100,height: 900}});
+      const maintenancePage = await maintenanceContext.newPage();
+      maintenancePage.on("pageerror", e => errors.push(e.message));
+      await maintenancePage.goto(base + "/dashboard");
+      await maintenancePage.getByRole("button", {name: /Public website/}).click();
+      await maintenancePage.waitForSelector(".bar-segment.maintenance");
+      assert(await maintenancePage.locator(".bar-segment.maintenance").first().evaluate(n => getComputedStyle(n).backgroundColor) === "rgb(56, 139, 253)", "maintenance segment is not blue");
+      assert((await maintenancePage.locator(".maintenance-history").textContent()).includes("Example software update"), "owner audit missing");
+      if (process.env.MAINTENANCE_SCREENSHOT) await maintenancePage.screenshot({path: process.env.MAINTENANCE_SCREENSHOT, fullPage: true});
+      await maintenancePage.setViewportSize({width: 390,height: 844});
+      assert(await maintenancePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "maintenance mobile overflow");
+      assert(errors.length === 0, "maintenance browser errors: " + errors.join(","));
+    }
+    response = await fetch(base + maintenancePath + "/complete", {method: "POST", headers: {...auth,"Content-Type":"application/json"},body:"{}"});
+    assert(response.status === 200 && (await response.json()).completed_at !== undefined, "maintenance completion failed");
+    assert(!(await (await fetch(base + "/api/public/web")).json()).maintenance_active, "maintenance stayed active");
+    console.log("Maintenance: durable API, idempotent creation, completion, blue segments and access separation passed");
     const stat = fs.readFileSync(`/proc/${proc.pid}/status`, "utf8");
     console.log(stat.match(/^VmRSS:.*$/m)?.[0]);
     console.log(

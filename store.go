@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS hourly(id TEXT NOT NULL,hour INTEGER NOT NULL,total I
 CREATE TABLE IF NOT EXISTS heartbeats(id TEXT PRIMARY KEY,time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS heartbeat_reports(id TEXT PRIMARY KEY,time INTEGER NOT NULL,detail TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS snoozes(id TEXT PRIMARY KEY,armed INTEGER NOT NULL,passes INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS maintenance(monitor_id TEXT NOT NULL,operation_id TEXT NOT NULL,reason TEXT NOT NULL,source TEXT NOT NULL,starts_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,completed_at INTEGER,PRIMARY KEY(monitor_id,operation_id));
+CREATE INDEX IF NOT EXISTS maintenance_window ON maintenance(monitor_id,starts_at,expires_at);
+CREATE TABLE IF NOT EXISTS alert_states(id TEXT PRIMARY KEY,status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);`)
 	if e != nil {
 		db.Close()
@@ -150,18 +153,36 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 	if e != nil {
 		return e
 	}
+	var active bool
+	if e = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM maintenance WHERE monitor_id=? AND starts_at<=? AND coalesce(completed_at,expires_at)>?)", m.ID, now, now).Scan(&active); e != nil {
+		return e
+	}
+	alertStatus := old
+	e = tx.QueryRow("SELECT status FROM alert_states WHERE id=?", m.ID).Scan(&alertStatus)
+	if e != nil && e != sql.ErrNoRows {
+		return e
+	}
+	if fp != configFP {
+		alertStatus = old
+	}
+	if !active {
+		if notify && !snoozed && v.Status != alertStatus && (v.Status == "down" || alertStatus == "down") {
+			if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", notificationBody(m, v.Status, lat, detail), now); e != nil {
+				return e
+			}
+		}
+		alertStatus = v.Status
+	}
+	// Persist even during maintenance so process restarts cannot lose the baseline.
+	if _, e = tx.Exec("INSERT INTO alert_states VALUES(?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status", m.ID, alertStatus); e != nil {
+		return e
+	}
 	if v.Status != old {
 		if _, e = tx.Exec("INSERT INTO incidents VALUES(?,?,?)", m.ID, v.Status, now); e != nil {
 			return e
 		}
-		if notify && !snoozed && (v.Status == "down" || old == "down") {
-			body := notificationBody(m, v.Status, lat, detail)
-			if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", body, now); e != nil {
-				return e
-			}
-		}
 	}
-	if notify && recovered {
+	if notify && recovered && !active {
 		if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", notificationBody(m, "up", lat, detail)+"; recovered and is visible again", now); e != nil {
 			return e
 		}
@@ -255,22 +276,29 @@ func (s *Store) setMeta(key string, v any) error {
 
 // WindowBucket bounds the response size independently of check cadence.
 type WindowBucket struct {
-	Time     int64   `json:"time"`
-	End      int64   `json:"end"`
-	Checks   int     `json:"checks"`
-	Failures int     `json:"failures"`
-	Up       float64 `json:"up"`
-	Down     float64 `json:"down"`
-	Latency  float64 `json:"latency"`
+	Maintenance float64 `json:"maintenance"`
+	Time        int64   `json:"time"`
+	End         int64   `json:"end"`
+	Checks      int     `json:"checks"`
+	Failures    int     `json:"failures"`
+	Up          float64 `json:"up"`
+	Down        float64 `json:"down"`
+	Latency     float64 `json:"latency"`
 }
 
 func (s *Store) windowHistory(ctx context.Context, id string, start, end int64, cadence float64) ([]WindowBucket, int, int, error) {
+	records, err := s.maintenanceHistory(ctx, id, start, end)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	intervals := maintenanceIntervals(records)
 	const count = 240
 	width := float64(end-start) / count
 	buckets := make([]WindowBucket, count)
 	for i := range buckets {
 		buckets[i].Time = start + int64(float64(i)*width)
 		buckets[i].End = start + int64(float64(i+1)*width)
+		buckets[i].Maintenance = maintenanceOverlap(intervals, float64(buckets[i].Time), float64(buckets[i].End))
 	}
 	rows, err := s.QueryContext(ctx, "SELECT time,ok,latency FROM results WHERE id=? AND time>=? AND time<=? ORDER BY time", id, start-int64(cadence)-1, end)
 	if err != nil {
@@ -288,10 +316,11 @@ func (s *Store) windowHistory(ctx context.Context, id string, start, end int64, 
 			if stop <= left {
 				break
 			}
+			coverage := stop - left - maintenanceOverlap(intervals, left, stop)
 			if p.OK {
-				buckets[index].Up += stop - left
+				buckets[index].Up += coverage
 			} else {
-				buckets[index].Down += stop - left
+				buckets[index].Down += coverage
 			}
 			left = stop
 		}

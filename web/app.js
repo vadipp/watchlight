@@ -48,9 +48,10 @@ function render() {
         group.open = expandedGroups.get(name) ?? activeViews.find((v) => v.id === selected)?.group === v.group;
         const summary = el("summary");
         const members = activeViews.filter((v) => (v.group || "Other") === name);
-        const down = members.filter((v) => v.state.status === "down").length;
-        const unknown = members.filter((v) => v.state.status === "unknown").length;
-        summary.append(el("span", name), el("small", `${members.length}${down ? ` · ${down} down` : unknown ? ` · ${unknown} pending` : " · all up"}`, down ? "error" : ""));
+        const down = members.filter((v) => !v.maintenance && v.state.status === "down").length;
+        const unknown = members.filter((v) => !v.maintenance && v.state.status === "unknown").length;
+        const maintenance = members.filter(v => v.maintenance).length;
+        summary.append(el("span", name), el("small", `${members.length}${down ? ` · ${down} down` : unknown ? ` · ${unknown} pending` : maintenance ? ` · ${maintenance} maintenance` : " · all up"}`, down ? "error" : ""));
         group.append(summary);
         group.addEventListener("toggle", () => {
           if (group.isConnected) expandedGroups.set(name, group.open);
@@ -61,7 +62,7 @@ function render() {
     }
   }
   const ordered = privateView
-    ? [...activeViews].sort((a, b) => Number(b.state.status === "down") - Number(a.state.status === "down"))
+    ? [...activeViews].sort((a, b) => Number(!b.maintenance && b.state.status === "down") - Number(!a.maintenance && a.state.status === "down"))
     : activeViews;
   let hiddenList;
   if (privateView && hiddenViews.length) {
@@ -78,9 +79,9 @@ function render() {
       "service" + (v.id === selected ? " selected" : ""),
     );
     b.append(
-      el("span", undefined, "dot " + v.state.status),
+      el("span", undefined, "dot " + (v.maintenance ? "maintenance" : v.state.status)),
       el("span", v.name),
-      el("small", v.state.status),
+      el("small", v.maintenance ? "maintenance" : v.state.status),
     );
     b.onclick = () => {
       selected = v.id;
@@ -90,17 +91,17 @@ function render() {
     (v.hidden ? hiddenList : privateView ? groups.get(v.group || "Other") : list).append(b);
   }
   const sum = document.querySelector("#summary");
-  const down = activeViews.filter((v) => v.state.status === "down").length,
-    unknown = activeViews.filter((v) => v.state.status === "unknown").length;
+  const down = activeViews.filter((v) => !v.maintenance && v.state.status === "down").length,
+    unknown = activeViews.filter((v) => !v.maintenance && v.state.status === "unknown").length;
   sum.className =
-    "summary " + (down ? "down" : unknown || !activeViews.length ? "unknown" : "up");
+    "summary " + (down ? "down" : unknown || !activeViews.length ? "unknown" : activeViews.some(v => v.maintenance) ? "maintenance" : "up");
   sum.textContent = !activeViews.length
     ? (hiddenViews.length ? "No active services · checks hidden until recovery" : "No services published")
     : down
       ? `${down} service${down === 1 ? "" : "s"} experiencing problems`
       : unknown
         ? `${unknown} service${unknown === 1 ? "" : "s"} awaiting fresh checks`
-        : "All services operational";
+        : activeViews.some(v => v.maintenance) ? "Scheduled maintenance in progress" : "All services operational";
   renderDetail();
 }
 function renderDetail() {
@@ -141,7 +142,7 @@ function renderDetail() {
       v.uptime === null ? "—" : v.uptime.toFixed(2) + "%",
     ],
     ...(v.latency_ms !== null && v.type !== "heartbeat" ? [["Response time", milliseconds(v.latency_ms)]] : []),
-    ["Current status", v.state.status],
+    ["Current status", summary.maintenance ? "Maintenance (" + v.state.status + ")" : v.state.status],
   ]) {
     const m = el("div", undefined, "metric");
     m.append(el("b", value), el("span", label));
@@ -150,7 +151,7 @@ function renderDetail() {
   detail.append(metrics);
   const h = v.buckets.filter(b => b.checks > 0).map(b => ({time: (b.time+b.end)/2, latency: b.latency}));
   const section = el("div", undefined, "section");
-  const historyLabel = el("div", `${v.samples} observed checks · green: up · red: down · grey: unknown`, "label");
+  const historyLabel = el("div", `${v.samples} observed checks · green: up · red: down · grey: unknown · blue: maintenance`, "label");
   section.append(historyLabel);
   const bars = el("div", undefined, "bars");
   const tooltip = el("p", "Tap a bar for details.", "label bar-details");
@@ -162,13 +163,13 @@ function renderDetail() {
       const group = v.buckets.slice(Math.floor(i*240/count), Math.floor((i+1)*240/count));
       const duration = group[group.length-1].end-group[0].time;
       const sum = key => group.reduce((n,b) => n+b[key],0);
-      const up = sum("up"), down = sum("down"), unknown = Math.max(0,duration-up-down);
+      const up = sum("up"), down = sum("down"), maintenance = sum("maintenance"), unknown = Math.max(0,duration-up-down-maintenance);
       const bar = el("button", undefined, "bar");
-      const description = `${fmt(group[0].time)} – ${fmt(group[group.length-1].end)} · ${sum("checks")} checks · ${sum("failures")} failures · up ${(100*up/duration).toFixed(2)}% · down ${(100*down/duration).toFixed(2)}% · unknown ${(100*unknown/duration).toFixed(2)}%`;
+      const description = `${fmt(group[0].time)} – ${fmt(group[group.length-1].end)} · ${sum("checks")} checks · ${sum("failures")} failures · up ${(100*up/duration).toFixed(2)}% · down ${(100*down/duration).toFixed(2)}% · unknown ${(100*unknown/duration).toFixed(2)}% · maintenance ${(100*maintenance/duration).toFixed(2)}%`;
       bar.title = description;
       bar.setAttribute("aria-label", description);
       bar.onclick = bar.onfocus = () => { tooltip.textContent = description; };
-      for (const [status, amount] of [["up",up],["down",down],["unknown",unknown]]) {
+      for (const [status, amount] of [["up",up],["down",down],["unknown",unknown],["maintenance",maintenance]]) {
         if (amount <= 0) continue;
         const segment = el("span", undefined, "bar-segment "+status);
         segment.style.flexGrow = amount;
@@ -226,6 +227,15 @@ function renderDetail() {
     section.append(chart, el("div", `Observed bucket mean range: ${milliseconds(observedMin)} – ${milliseconds(observedMax)}`, "label chart-range"));
   }
   detail.append(section);
+  if (privateView && v.maintenance?.length) {
+    const records = el("div", undefined, "section maintenance-history");
+    records.append(el("h2", "Maintenance"));
+    for (const m of v.maintenance) {
+      const end = m.completed_at ?? m.expires_at;
+      records.append(el("p", fmt(m.starts_at) + " – " + fmt(end) + " · " + m.reason + " · " + m.source + " · " + m.operation_id, "label"));
+    }
+    detail.append(records);
+  }
   if (privateView && v.state.error)
     detail.append(el("p", v.state.error, "error"));
   const incidents = el("div", undefined, "section");

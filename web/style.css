@@ -177,10 +177,12 @@ aside.grouped {
 }
 .metrics {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 .metric {
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 18px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -410,3 +412,10 @@ footer.note { margin: 24px 0 0; }
 
 .hidden-checks { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .hidden-checks > summary { cursor: pointer; color: var(--muted); padding: 8px 0; }
+
+.bar-segment.maintenance, .dot.maintenance { background: #388bfd; }
+
+.bar-segment.maintenance { min-height: 2px; }
+.summary.maintenance { border-color: #388bfd; color: #8fbeff; }
+
+.maintenance-history { overflow-wrap: anywhere; }

@@ -73,7 +73,8 @@ previously loaded details as stale. Request contexts reach database queries and
 aggregation, so disconnected clients can stop obsolete read work.
 
 The strip combines buckets into up to 60 equal-duration bars. Each bar stacks
-green (successful coverage), red (failed coverage), and grey (unknown time).
+green (successful coverage), red (failed coverage), grey (unknown time), and blue
+(planned maintenance). Maintenance coverage takes precedence over other colours.
 A check covers at most one configured interval, ending earlier if another check
 arrives; remaining time, including missing history, is unknown. Hover, focus or
 tap a bar for its interval, check/failure counts and coverage percentages.
@@ -154,7 +155,7 @@ node --check web/app.js
 The UI uses native browser JavaScript and CSS, embedded in the Go executable.
 No frontend build step.
 
-Not yet included: maintenance scheduling, browser Web Push, notification resend
+Not yet included: future maintenance scheduling, browser Web Push, notification resend
 controls, long-term charts, bulk-import tools, detailed DNS/ICMP checks. Telegram and SMTP delivery require live credential testing
 before deployment. Resource usage must be measured on target hardware before
 setting production limits; Go alone is not a resource guarantee.
@@ -228,3 +229,11 @@ meet the configured recovery threshold; earlier successes do not count. Recovery
 atomically clears the snooze and queues one recovery/visibility notification when
 notifications are enabled. Later failures behave normally. Repeat the command to
 rearm the snooze. No configuration edit or service restart is needed for the action.
+
+## Planned maintenance
+
+Use the owner-authenticated [Maintenance API](docs/maintenance.md) to start a bounded
+window before an intentional service stop and complete it after verified recovery.
+Checks continue, new alerts are muted inside the window, and continuing failures
+alert after expiry. The segmented history marks maintenance blue. Private reasons
+and operation IDs remain owner-only; history is queryable for retrospective checks.
