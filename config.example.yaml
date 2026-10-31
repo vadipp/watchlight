@@ -3,6 +3,14 @@ database: data/watchlight.db
 owner_user: owner
 owner_password_env: WATCHLIGHT_PASSWORD
 retention_days: 7
+# Optional automation grants; secrets belong in the named environment variable.
+# api_tokens:
+#   - name: nightly-backup
+#     token_env: BACKUP_MAINTENANCE_TOKEN
+#     monitors: [worker-heartbeat]
+#     scopes: [maintenance:read, maintenance:write, monitor:read]
+#     operation_prefix: backup-
+#     max_duration_seconds: 900
 # Uncomment to enable durable down/recovery notifications.
 # telegram:
 #   token_env: TELEGRAM_BOT_TOKEN

@@ -84,6 +84,7 @@ func handler(c Config, s *Store) http.Handler {
 		}
 	}
 	maintenanceRoutes(mux, c, s, auth)
+	monitorStatusRoute(mux, c, s, auth)
 	snapshot := func(private bool, page *StatusPage) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			detailID := r.PathValue("id")

@@ -90,7 +90,7 @@ func maintenanceRoutes(mux *http.ServeMux, c Config, s *Store, auth func(http.Ha
 		}
 		return true
 	}
-	mux.HandleFunc("GET /api/maintenance/{id}", auth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/maintenance/{id}", scopedAuth(c, auth, "maintenance:read")(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !exists(id) {
 			http.NotFound(w, r)
@@ -124,7 +124,7 @@ func maintenanceRoutes(mux *http.ServeMux, c Config, s *Store, auth func(http.Ha
 		}
 		writeJSON(w, rows)
 	}))
-	mux.HandleFunc("PUT /api/maintenance/{id}/{operation}", auth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /api/maintenance/{id}/{operation}", scopedAuth(c, auth, "maintenance:write")(func(w http.ResponseWriter, r *http.Request) {
 		if !writeRequest(w, r) {
 			return
 		}
@@ -146,6 +146,10 @@ func maintenanceRoutes(mux *http.ServeMux, c Config, s *Store, auth func(http.Ha
 		dec.DisallowUnknownFields()
 		if dec.Decode(&input) != nil || dec.Decode(new(any)) != io.EOF || !validMaintenanceText(input.Reason, 512) || !validMaintenanceText(input.Source, 128) || input.Duration < 1 || input.Duration > 86400 {
 			http.Error(w, "Invalid maintenance request", 400)
+			return
+		}
+		if grant, ok := r.Context().Value(apiTokenKey{}).(APIToken); ok && input.Duration > grant.MaxDurationSeconds {
+			http.Error(w, "Duration exceeds token grant", 403)
 			return
 		}
 		tx, err := s.BeginTx(r.Context(), nil)
@@ -180,7 +184,7 @@ func maintenanceRoutes(mux *http.ServeMux, c Config, s *Store, auth func(http.Ha
 		}
 		writeJSON(w, m)
 	}))
-	mux.HandleFunc("POST /api/maintenance/{id}/{operation}/complete", auth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/maintenance/{id}/{operation}/complete", scopedAuth(c, auth, "maintenance:write")(func(w http.ResponseWriter, r *http.Request) {
 		if !writeRequest(w, r) {
 			return
 		}

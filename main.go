@@ -90,6 +90,10 @@ func execute() int {
 		}
 	}
 	if mode == "serve" {
+		if err := validateAPITokenSecrets(c); err != nil {
+			log.Print(err)
+			return 1
+		}
 		p, _ := secret(c.OwnerPasswordEnv)
 		if len(p) < 16 {
 			log.Print("owner password must be at least 16 characters")

@@ -24,6 +24,7 @@ type StatusPage struct {
 	Monitors []string `yaml:"monitors"`
 }
 type Config struct {
+	APITokens         []APIToken   `yaml:"api_tokens"`
 	StatusPages       []StatusPage `yaml:"status_pages"`
 	DefaultStatusPage string       `yaml:"default_status_page"`
 	Listen            string       `yaml:"listen"`
@@ -179,6 +180,9 @@ func loadConfig(path string) (Config, error) {
 		default:
 			return c, fmt.Errorf("%s: unsupported type", m.ID)
 		}
+	}
+	if err := validateAPITokens(c, seen); err != nil {
+		return c, err
 	}
 	pages := map[string]bool{}
 	for _, p := range c.StatusPages {

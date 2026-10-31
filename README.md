@@ -231,10 +231,18 @@ atomically clears the snooze and queues one recovery/visibility notification whe
 notifications are enabled. Later failures behave normally. Repeat the command to
 rearm the snooze. No configuration edit or service restart is needed for the action.
 
+## Scoped API tokens
+
+Automation can use [scoped bearer tokens](docs/api-tokens.md) with explicit
+monitor and permission allowlists. Maintenance write grants also restrict operation
+IDs and maximum duration. Owner credentials remain separate; heartbeat tokens
+cannot manage maintenance. Grants and secrets are configured without an admin UI.
+
 ## Planned maintenance
 
-Use the owner-authenticated [Maintenance API](docs/maintenance.md) to start a bounded
+Use the authenticated [Maintenance API](docs/maintenance.md) to start a bounded
 window before an intentional service stop and complete it after verified recovery.
 Checks continue, new alerts are muted inside the window, and continuing failures
 alert after expiry. The segmented history marks maintenance blue. Private reasons
-and operation IDs remain owner-only; history is queryable for retrospective checks.
+and operation IDs require owner access or an explicit maintenance-read grant;
+history is queryable for retrospective checks.

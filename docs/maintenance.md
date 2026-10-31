@@ -1,8 +1,8 @@
 # Planned maintenance API
 
-The owner-authenticated API is the durable source of truth for explicitly planned
-service interruptions. It uses the same HTTP Basic credentials as the owner
-API. Credentials belong in protected files/headers, never URLs or Git. A monitor's
+The authenticated API is the durable source of truth for explicitly planned
+service interruptions. It accepts owner HTTP Basic credentials or
+[scoped API tokens](api-tokens.md) restricted to explicit monitors and permissions. Credentials belong in protected files/headers, never URLs or Git. A monitor's
 heartbeat token cannot create or read maintenance records.
 
 ## Start and complete
@@ -27,7 +27,7 @@ it early. `completed_at` is persisted and capped at the original expiry. Repeati
 completion returns the same record. There is no edit, delete or extension route.
 Multiple windows may overlap; coverage is their union.
 
-Requests without owner authentication return 401; unknown monitors/operations 404;
+Requests without valid authentication return 401; scoped grants can return 403; unknown monitors/operations 404;
 invalid JSON or fields 400. Writes require JSON and reject browser cross-site
 requests (415). No CORS access is enabled. Storage failures return 503. Do not
 assume a maintenance window exists after a failed/uncertain write: retry the same
@@ -69,7 +69,7 @@ erased; its recovery can be delivered once the window ends.
 
 Public summaries expose only a maintenance boolean; public details expose active
 state and maintenance duration per bucket. Private reason/source/operation IDs
-are restricted to owner routes. Owner details include the intersecting records.
+are restricted to authenticated owner or explicitly scoped maintenance reads. Owner details include the intersecting records.
 Public visibility and status-page membership still apply.
 
 The segmented strip keeps all successful coverage green, including inside
