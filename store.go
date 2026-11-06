@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS hourly(id TEXT NOT NULL,hour INTEGER NOT NULL,total I
 CREATE TABLE IF NOT EXISTS heartbeats(id TEXT PRIMARY KEY,time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS heartbeat_reports(id TEXT PRIMARY KEY,time INTEGER NOT NULL,detail TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS snoozes(id TEXT PRIMARY KEY,armed INTEGER NOT NULL,passes INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS snooze_recovery(id TEXT PRIMARY KEY,since INTEGER NOT NULL,last INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS maintenance(monitor_id TEXT NOT NULL,operation_id TEXT NOT NULL,reason TEXT NOT NULL,source TEXT NOT NULL,starts_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,completed_at INTEGER,PRIMARY KEY(monitor_id,operation_id));
 CREATE INDEX IF NOT EXISTS maintenance_window ON maintenance(monitor_id,starts_at,expires_at);
 CREATE TABLE IF NOT EXISTS alert_states(id TEXT PRIMARY KEY,status TEXT NOT NULL);
@@ -86,6 +87,10 @@ func (s *Store) state(id string) State {
 	return v
 }
 func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bool) error {
+	return s.recordAt(m, ok, lat, detail, notify, time.Now())
+}
+func (s *Store) recordAt(m Monitor, ok bool, lat float64, detail string, notify bool, checked time.Time) error {
+	now := checked.Unix()
 	// Preserve the existing schema without persisting disabled measurements.
 	if !m.recordsLatency() {
 		lat = 0
@@ -115,13 +120,34 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 	snoozed := snoozeErr == nil
 	recovered := false
 	if snoozed {
+		var since, last int64
+		err := tx.QueryRow("SELECT since,last FROM snooze_recovery WHERE id=?", m.ID).Scan(&since, &last)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		// A gap beyond the expected interval, timeout and scheduling margin
+		// cannot establish continuous recovery.
+		maxGap := int64((duration(m.Interval) + duration(m.Timeout) + 5*time.Second) / time.Second)
+		if !ok || fp != configFP || now < last || now-last > maxGap {
+			since = 0
+			snoozePasses = 0
+		}
+		if ok && since == 0 {
+			since = now
+		}
+		if _, e = tx.Exec("INSERT INTO snooze_recovery VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET since=excluded.since,last=excluded.last", m.ID, since, now); e != nil {
+			return e
+		}
 		if ok {
 			snoozePasses++
 		} else {
 			snoozePasses = 0
 		}
-		recovered = ok && snoozePasses >= m.Successes
+		recovered = ok && snoozePasses >= m.Successes && now-since >= 600
 		if recovered {
+			if _, e = tx.Exec("DELETE FROM snooze_recovery WHERE id=?", m.ID); e != nil {
+				return e
+			}
 			_, e = tx.Exec("DELETE FROM snoozes WHERE id=?", m.ID)
 		} else {
 			_, e = tx.Exec("UPDATE snoozes SET passes=? WHERE id=?", snoozePasses, m.ID)
@@ -144,7 +170,6 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 			v.Status = "down"
 		}
 	}
-	now := time.Now().Unix()
 	_, e = tx.Exec("INSERT INTO results VALUES(?,?,?,?)", m.ID, now, ok, lat)
 	if e != nil {
 		return e
@@ -192,8 +217,18 @@ func (s *Store) record(m Monitor, ok bool, lat float64, detail string, notify bo
 
 // A snooze is a one-time persisted action; old successes cannot release it.
 func (s *Store) hideUntilOK(id string) error {
-	_, err := s.Exec("INSERT INTO snoozes(id,armed,passes) VALUES(?,?,0) ON CONFLICT(id) DO UPDATE SET armed=excluded.armed,passes=0", id, time.Now().Unix())
-	return err
+	tx, err := s.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("DELETE FROM snooze_recovery WHERE id=?", id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("INSERT INTO snoozes(id,armed,passes) VALUES(?,?,0) ON CONFLICT(id) DO UPDATE SET armed=excluded.armed,passes=0", id, time.Now().Unix()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (s *Store) snoozesContext(ctx context.Context) (map[string]bool, error) {
 	rows, err := s.QueryContext(ctx, "SELECT id FROM snoozes")

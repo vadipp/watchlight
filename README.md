@@ -226,7 +226,9 @@ Run against the same database as the primary, with its normal filesystem permiss
 SQLite and survives restarts. It excludes the monitor from public summary/detail
 APIs and from owner group/dashboard counts. Owners can inspect it in a collapsed
 Hidden checks section. Alerts are muted until consecutive fresh successful checks
-meet the configured recovery threshold; earlier successes do not count. Recovery
+span at least ten minutes and meet the configured recovery threshold. Earlier
+successes do not count. Any failed check or gap longer than one check interval
+plus its timeout and five seconds resets the timer. Recovery
 atomically clears the snooze and queues one recovery/visibility notification when
 notifications are enabled. Later failures behave normally. Repeat the command to
 rearm the snooze. No configuration edit or service restart is needed for the action.
