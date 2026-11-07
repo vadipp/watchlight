@@ -379,7 +379,9 @@ func (s *Store) windowHistory(ctx context.Context, id string, start, end int64, 
 		}
 		index := min(count-1, int(float64(point.Time-start)/width))
 		buckets[index].Checks++
-		buckets[index].Latency += point.Latency
+		if point.OK {
+			buckets[index].Latency += point.Latency
+		}
 		total++
 		if point.OK {
 			successes++
@@ -391,8 +393,8 @@ func (s *Store) windowHistory(ctx context.Context, id string, start, end int64, 
 		addCoverage(*previous, float64(end))
 	}
 	for i := range buckets {
-		if buckets[i].Checks > 0 {
-			buckets[i].Latency /= float64(buckets[i].Checks)
+		if successes := buckets[i].Checks - buckets[i].Failures; successes > 0 {
+			buckets[i].Latency /= float64(successes)
 		}
 	}
 	return buckets, total, successes, rows.Err()

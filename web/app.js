@@ -141,7 +141,7 @@ function renderDetail() {
       `Observed uptime · ${Math.round((v.window_end-v.window_start)/3600) === 168 ? "7d" : Math.round((v.window_end-v.window_start)/3600)+"h"}`,
       v.uptime === null ? "—" : v.uptime.toFixed(2) + "%",
     ],
-    ...(v.latency_ms !== null && v.type !== "heartbeat" ? [["Response time", milliseconds(v.latency_ms)]] : []),
+    ...(v.latency_enabled ? [["Response time", v.latency_ms === null ? "—" : milliseconds(v.latency_ms)]] : []),
     ["Current status", summary.maintenance ? "Maintenance (" + v.state.status + ")" : v.state.status],
   ]) {
     const m = el("div", undefined, "metric");
@@ -149,7 +149,7 @@ function renderDetail() {
     metrics.append(m);
   }
   detail.append(metrics);
-  const h = v.buckets.filter(b => b.checks > 0).map(b => ({time: (b.time+b.end)/2, latency: b.latency}));
+  const h = v.buckets.filter(b => b.checks > b.failures).map(b => ({time: (b.time+b.end)/2, latency: b.latency}));
   const section = el("div", undefined, "section");
   const historyLabel = el("div", `${v.samples} observed checks · green: up · red: down · grey: unknown · blue: maintenance`, "label");
   section.append(historyLabel);
@@ -183,7 +183,7 @@ function renderDetail() {
   const times = el("div", undefined, "times");
   times.append(el("span", fmt(v.window_start)), el("span", fmt(v.window_end)));
   section.append(times);
-  if (h.length > 1 && v.latency_ms !== null && v.type !== "heartbeat") {
+  if (h.length > 1 && v.latency_enabled) {
     const ns = "http://www.w3.org/2000/svg",
       svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 600 125");
@@ -219,7 +219,7 @@ function renderDetail() {
       run = [];
     };
     for (const b of v.buckets) {
-      if (!b.checks) { flush(); continue; }
+      if (b.checks <= b.failures) { flush(); continue; }
       run.push(`${(((b.time+b.end)/2-v.window_start)/(v.window_end-v.window_start))*600},${120-(b.latency/max)*110}`);
     }
     flush();

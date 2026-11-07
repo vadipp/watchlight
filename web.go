@@ -19,6 +19,7 @@ import (
 var assets embed.FS
 
 type View struct {
+	LatencyEnabled      bool           `json:"latency_enabled"`
 	HeartbeatReceivedAt int64          `json:"heartbeat_received_at,omitempty"`
 	Maintenance         []Maintenance  `json:"maintenance,omitempty"`
 	MaintenanceActive   bool           `json:"maintenance_active"`
@@ -210,14 +211,16 @@ func handler(c Config, s *Store) http.Handler {
 				v := 100 * float64(up) / float64(total)
 				uptime = &v
 			}
-			if !m.recordsLatency() {
+			if st.Pass == 0 || !m.recordsLatency() {
 				st.Latency = 0
+			}
+			if !m.recordsLatency() {
 				for i := range buckets {
 					buckets[i].Latency = 0
 				}
 			}
-			view := View{MaintenanceActive: active[m.ID], WindowStart: start, WindowEnd: end, Buckets: buckets, ID: m.ID, Name: m.Name, State: st, Incidents: inc, Uptime: uptime, Samples: total}
-			if m.recordsLatency() && st.Checked != 0 {
+			view := View{LatencyEnabled: m.recordsLatency(), MaintenanceActive: active[m.ID], WindowStart: start, WindowEnd: end, Buckets: buckets, ID: m.ID, Name: m.Name, State: st, Incidents: inc, Uptime: uptime, Samples: total}
+			if m.recordsLatency() && st.Checked != 0 && st.Pass > 0 {
 				latency := st.Latency
 				view.LatencyMS = &latency
 			}
