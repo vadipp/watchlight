@@ -48,6 +48,7 @@ CREATE INDEX IF NOT EXISTS results_time ON results(time);
 CREATE INDEX IF NOT EXISTS results_id_time ON results(id,time);
 CREATE TABLE IF NOT EXISTS incidents(id TEXT NOT NULL,status TEXT NOT NULL,time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY,body TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS outbox_events(seq INTEGER PRIMARY KEY REFERENCES outbox(seq) ON DELETE CASCADE,monitor_id TEXT NOT NULL,name TEXT NOT NULL,status TEXT NOT NULL,down_since INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS hourly(id TEXT NOT NULL,hour INTEGER NOT NULL,total INTEGER NOT NULL,successes INTEGER NOT NULL,latency_sum REAL NOT NULL,latency_max REAL NOT NULL,PRIMARY KEY(id,hour));
 CREATE TABLE IF NOT EXISTS heartbeats(id TEXT PRIMARY KEY,time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS heartbeat_reports(id TEXT PRIMARY KEY,time INTEGER NOT NULL,detail TEXT NOT NULL);
@@ -192,7 +193,7 @@ func (s *Store) recordAt(m Monitor, ok bool, lat float64, detail string, notify 
 	}
 	if !active {
 		if notify && !snoozed && v.Status != alertStatus && (v.Status == "down" || alertStatus == "down") {
-			if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", notificationBody(m, v.Status, lat, detail), now); e != nil {
+			if e = enqueueNotification(tx, m, v.Status, lat, detail, now, ""); e != nil {
 				return e
 			}
 		}
@@ -208,7 +209,7 @@ func (s *Store) recordAt(m Monitor, ok bool, lat float64, detail string, notify 
 		}
 	}
 	if notify && recovered && !active {
-		if _, e = tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", notificationBody(m, "up", lat, detail)+"; recovered and is visible again", now); e != nil {
+		if e = enqueueNotification(tx, m, "up", lat, detail, now, "; recovered and is visible again"); e != nil {
 			return e
 		}
 	}

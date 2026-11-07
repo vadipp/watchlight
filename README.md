@@ -89,16 +89,34 @@ Raw retention shorter than the selected window appears as unknown coverage.
 
 Uncomment `telegram` in the example and provide the named token/chat variables.
 Down and recovery transitions enter the SQLite outbox in the same transaction as
-the incident. Failed deliveries retry with exponential backoff up to 512 seconds.
-Delivery is at least once: a crash after acceptance can duplicate a message.
-Only monitor display names and status go to Telegram, never target URLs or tokens.
-Choose non-secret display names. Old queued transitions remain queued across
-configuration edits; review the database before changing Telegram destinations.
+incident history. Normal delivery collects changes for ten seconds, then batches
+by monitor. Undelivered down/up pairs become one recovered-incident entry;
+repeated changes include a transition count and total observed downtime. Ongoing
+failures appear first, with the latest down time. A recovery whose down alert
+was already delivered is sent as a normal recovery. Event times use explicit UTC.
+Dashboard history retains every transition.
 
-The primary probes Telegram `getMe` every minute and exposes freshness/results
-in the authenticated `/api/health` response, alongside scheduler and outbox health.
-This tests API access and bot credentials, not delivery to the user's device.
-Actual sends validate Telegram's HTTP and JSON success response.
+Delivery failures use one persistent destination-wide exponential backoff, capped
+at one minute for network errors. Telegram flood-control responses respect
+`retry_after` even when longer. New events cannot bypass the cooldown; once it
+expires the latest undelivered events are summarized again. Long summaries split
+at monitor boundaries into messages below 4096 characters, paced at least three
+seconds apart. Queue entries are removed only after successful delivery; a
+concurrent new event is retained. Delivery is at least once: an ambiguous network
+response or a crash after Telegram acceptance can duplicate a message.
+
+Only monitor display names, status, check details and event times go to Telegram,
+never target URLs or tokens. Choose non-secret display names. Old queued
+transitions remain queued across configuration edits; review the database before
+changing Telegram destinations. Existing unstructured outbox entries are batched
+with timestamps but cannot be combined by monitor retroactively.
+
+When idle, the primary probes Telegram `getMe` approximately every minute,
+subject to the same cooldown. Successful sends also refresh Telegram health.
+The authenticated `/api/health` response exposes API freshness/results,
+scheduler health and pending event count. This tests API access and bot
+credentials, not delivery to the user's device. Actual sends validate Telegram's
+HTTP and JSON success response.
 
 ## Independent watchdog
 

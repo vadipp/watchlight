@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/smtp"
@@ -58,59 +57,16 @@ func telegramCallUsing(ctx context.Context, client *http.Client, token, method s
 	}
 	defer r.Body.Close()
 	var result struct {
-		OK bool `json:"ok"`
+		OK         bool `json:"ok"`
+		ErrorCode  int  `json:"error_code"`
+		Parameters struct {
+			RetryAfter int64 `json:"retry_after"`
+		} `json:"parameters"`
 	}
 	if e = json.NewDecoder(io.LimitReader(r.Body, 65536)).Decode(&result); e != nil || r.StatusCode != 200 || !result.OK {
-		return errors.New("Telegram rejected request")
+		return &telegramError{RateLimited: r.StatusCode == 429 || result.ErrorCode == 429, RetryAfter: result.Parameters.RetryAfter}
 	}
 	return nil
-}
-func runNotifications(ctx context.Context, c Config, s *Store) {
-	if c.Telegram.TokenEnv == "" {
-		return
-	}
-	client := newTelegramClient(c.Telegram.RelayAddress)
-	defer client.CloseIdleConnections()
-	token, _ := secret(c.Telegram.TokenEnv)
-	chat, _ := secret(c.Telegram.ChatIDEnv)
-	lastProbe := time.Time{}
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		if time.Since(lastProbe) >= time.Minute {
-			probe, cancel := context.WithTimeout(ctx, 10*time.Second)
-			e := telegramCallUsing(probe, client, token, "getMe", url.Values{})
-			cancel()
-			if e := s.setMeta("telegram", TelegramHealth{OK: e == nil, Checked: time.Now().Unix()}); e != nil {
-				log.Print("cannot persist Telegram health")
-			}
-			lastProbe = time.Now()
-		}
-		var seq int64
-		var body string
-		var attempts int
-		if s.QueryRow("SELECT seq,body,attempts FROM outbox WHERE next<=? ORDER BY seq LIMIT 1", time.Now().Unix()).Scan(&seq, &body, &attempts) != nil {
-			continue
-		}
-		callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		e := telegramCallUsing(callCtx, client, token, "sendMessage", url.Values{"chat_id": {chat}, "text": {body}})
-		cancel()
-		if e == nil {
-			if _, e = s.Exec("DELETE FROM outbox WHERE seq=?", seq); e != nil {
-				log.Printf("outbox acknowledgement failed: %v", e)
-			}
-		} else {
-			attempts++
-			delay := time.Duration(1<<min(attempts, 9)) * time.Second
-			s.Exec("UPDATE outbox SET attempts=?,next=? WHERE seq=?", attempts, time.Now().Add(delay).Unix(), seq)
-			log.Print("Telegram delivery failed; retry queued")
-		}
-	}
 }
 func sendEmail(ctx context.Context, c SMTP, body string) error {
 	// Require STARTTLS and certificate verification before sending any credentials or content.
