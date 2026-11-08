@@ -89,27 +89,42 @@ type notificationBatch struct {
 	Seqs []int64
 }
 
-func alertTime(t int64) string   { return time.Unix(t, 0).UTC().Format("02 Jan 15:04:05 UTC") }
+type alertClock struct {
+	Location *time.Location
+	Label    string
+}
+
+func (c alertClock) format(t int64) string {
+	location := c.Location
+	if location == nil {
+		location = time.UTC
+	}
+	stamp := time.Unix(t, 0).In(location)
+	if c.Label != "" {
+		return stamp.Format("02 Jan 15:04:05") + " " + c.Label
+	}
+	return stamp.Format("02 Jan 15:04:05 MST")
+}
 func cleanAlert(s string) string { return strings.Join(strings.Fields(s), " ") }
 func observedDuration(start, end int64) string {
 	return (time.Duration(max(0, end-start)) * time.Second).String()
 }
 
-func (g queuedGroup) line() string {
+func (g queuedGroup) line(clock alertClock) string {
 	if g.ID == "" {
-		return cleanAlert(g.Body) + " · " + alertTime(g.Last)
+		return cleanAlert(g.Body) + " · " + clock.format(g.Last)
 	}
 	changes := ""
 	if g.Count > 2 {
 		changes = fmt.Sprintf("; %d transitions", g.Count)
 	}
 	if g.Status == "down" {
-		return cleanAlert(g.Body) + " · down since " + alertTime(g.DownSince) + changes
+		return cleanAlert(g.Body) + " · down since " + clock.format(g.DownSince) + changes
 	}
 	if g.Count > 1 && g.DownSince > 0 {
-		return fmt.Sprintf("✅ %s — failed and recovered; %s – %s; total observed downtime %s%s", cleanAlert(g.Name), alertTime(g.FirstDown), alertTime(g.Last), observedDuration(0, g.Downtime), changes) + visibilityNote(g.Body)
+		return fmt.Sprintf("✅ %s — failed and recovered; %s – %s; total observed downtime %s%s", cleanAlert(g.Name), clock.format(g.FirstDown), clock.format(g.Last), observedDuration(0, g.Downtime), changes) + visibilityNote(g.Body)
 	}
-	line := cleanAlert(g.Body) + " · recovered " + alertTime(g.Last)
+	line := cleanAlert(g.Body) + " · recovered " + clock.format(g.Last)
 	if g.DownSince > 0 {
 		line += "; observed outage " + observedDuration(g.DownSince, g.Last)
 	}
@@ -137,7 +152,7 @@ func telegramText(s string, limit int) string {
 }
 func telegramLength(s string) int { return len(utf16.Encode([]rune(s))) }
 
-func (s *Store) notificationBatch(now int64, delayed bool) (notificationBatch, error) {
+func (s *Store) notificationBatch(now int64, delayed bool, clock alertClock) (notificationBatch, error) {
 	rows, err := s.Query(`SELECT o.seq,o.body,o.created,coalesce(e.monitor_id,''),coalesce(e.name,''),coalesce(e.status,''),coalesce(e.down_since,0)
  FROM outbox o LEFT JOIN outbox_events e ON e.seq=o.seq ORDER BY o.seq`)
 	if err != nil {
@@ -202,12 +217,19 @@ func (s *Store) notificationBatch(now int64, delayed bool) (notificationBatch, e
 	if delayed {
 		header = "Delayed alerts"
 	}
-	header += " · " + alertTime(oldest) + " – " + alertTime(newest)
+	header += " · " + clock.format(oldest) + " – " + clock.format(newest)
+	if len(sorted) == 1 {
+		body := telegramText(sorted[0].line(clock), 3500)
+		if delayed {
+			body += " · delayed delivery"
+		}
+		return notificationBatch{Body: body, Seqs: sorted[0].Seqs}, nil
+	}
 	var batch notificationBatch
 	batch.Body = header
 	selected := 0
 	for _, g := range sorted {
-		line := telegramText(g.line(), 3000)
+		line := telegramText(g.line(clock), 3000)
 		if telegramLength(batch.Body)+telegramLength(line)+1 > 3500 {
 			break
 		}
@@ -255,6 +277,7 @@ type notificationWorker struct {
 	chat       string
 	lastProbe  int64
 	finishedAt func() time.Time
+	clock      alertClock
 }
 
 func (w *notificationWorker) tick(ctx context.Context, now int64) error {
@@ -272,7 +295,7 @@ func (w *notificationWorker) tick(ctx context.Context, now int64) error {
 	if now < state.Next {
 		return nil
 	}
-	batch, err := w.store.notificationBatch(now, state.DelayedSince != 0)
+	batch, err := w.store.notificationBatch(now, state.DelayedSince != 0, w.clock)
 	if err != nil {
 		return err
 	}
@@ -325,7 +348,12 @@ func runNotifications(ctx context.Context, c Config, s *Store) {
 	defer client.CloseIdleConnections()
 	token, _ := secret(c.Telegram.TokenEnv)
 	chat, _ := secret(c.Telegram.ChatIDEnv)
-	worker := notificationWorker{store: s, chat: chat, finishedAt: time.Now, call: func(ctx context.Context, method string, form url.Values) error {
+	clock, err := c.Telegram.alertClock()
+	if err != nil {
+		log.Print("Invalid Telegram timezone")
+		return
+	}
+	worker := notificationWorker{store: s, chat: chat, clock: clock, finishedAt: time.Now, call: func(ctx context.Context, method string, form url.Values) error {
 		return telegramCallUsing(ctx, client, token, method, form)
 	}}
 	ticker := time.NewTicker(time.Second)

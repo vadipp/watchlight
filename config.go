@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"gopkg.in/yaml.v3"
 )
@@ -56,9 +57,11 @@ type Monitor struct {
 	MaxAge           string `yaml:"max_age"`
 }
 type Telegram struct {
-	RelayAddress string `yaml:"relay_address"`
-	TokenEnv     string `yaml:"token_env"`
-	ChatIDEnv    string `yaml:"chat_id_env"`
+	Timezone      string `yaml:"timezone"`
+	TimezoneLabel string `yaml:"timezone_label"`
+	RelayAddress  string `yaml:"relay_address"`
+	TokenEnv      string `yaml:"token_env"`
+	ChatIDEnv     string `yaml:"chat_id_env"`
 }
 type Watchdog struct {
 	HeartbeatURL      string `yaml:"heartbeat_url"`
@@ -206,6 +209,9 @@ func loadConfig(path string) (Config, error) {
 	if c.DefaultStatusPage != "" && !pages[c.DefaultStatusPage] {
 		return c, errors.New("default_status_page must reference a configured page")
 	}
+	if _, err := c.Telegram.alertClock(); err != nil {
+		return c, err
+	}
 	if c.Telegram.RelayAddress != "" {
 		if _, _, e := net.SplitHostPort(c.Telegram.RelayAddress); e != nil {
 			return c, errors.New("invalid Telegram relay_address")
@@ -275,4 +281,19 @@ func fingerprint(m Monitor) string {
 
 func (m Monitor) recordsLatency() bool {
 	return m.Type != "heartbeat" && (m.RecordLatency == nil || *m.RecordLatency)
+}
+
+func (t Telegram) alertClock() (alertClock, error) {
+	zone := t.Timezone
+	if zone == "" {
+		zone = "UTC"
+	}
+	location, err := time.LoadLocation(zone)
+	if err != nil {
+		return alertClock{}, errors.New("invalid Telegram timezone")
+	}
+	if t.TimezoneLabel != "" && !regexp.MustCompile(`^[A-Za-z0-9_+:-]{1,16}$`).MatchString(t.TimezoneLabel) {
+		return alertClock{}, errors.New("invalid Telegram timezone_label")
+	}
+	return alertClock{Location: location, Label: t.TimezoneLabel}, nil
 }

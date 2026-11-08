@@ -89,11 +89,16 @@ Raw retention shorter than the selected window appears as unknown coverage.
 
 Uncomment `telegram` in the example and provide the named token/chat variables.
 Down and recovery transitions enter the SQLite outbox in the same transaction as
-incident history. Normal delivery collects changes for ten seconds, then batches
-by monitor. Undelivered down/up pairs become one recovered-incident entry;
+incident history. Normal delivery collects events for ten seconds, then batches
+by monitor. A single resulting alert or monitor summary omits the batch header.
+Undelivered down/up pairs become one recovered-incident entry;
 repeated changes include a transition count and total observed downtime. Ongoing
 failures appear first, with the latest down time. A recovery whose down alert
-was already delivered is sent as a normal recovery. Event times use explicit UTC.
+was already delivered is sent as a normal recovery. Event times default to UTC.
+Set Telegram `timezone` to an IANA timezone and
+optionally `timezone_label` to a short display abbreviation. Timezone data is
+embedded for minimal container images. These settings affect notification text;
+stored event timestamps remain unchanged.
 Dashboard history retains every transition.
 
 Delivery failures use one persistent destination-wide exponential backoff, capped

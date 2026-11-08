@@ -41,11 +41,11 @@ func TestBatchesSummarizeTransitionsAndPreserveHistory(t *testing.T) {
 	queueTransition(t, s, "recovered", false, 1100)
 	queueTransition(t, s, "recovered", true, 1130)
 	queueTransition(t, s, "down", false, 1140)
-	b, err := s.notificationBatch(1141, true)
+	b, err := s.notificationBatch(1141, true, alertClock{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Delayed alerts", "Service recovered — failed and recovered", "total observed downtime 1m30s", "4 transitions", "Service down", "down since " + alertTime(1140)} {
+	for _, want := range []string{"Delayed alerts", "Service recovered — failed and recovered", "total observed downtime 1m30s", "4 transitions", "Service down", "down since " + (alertClock{}).format(1140)} {
 		if !strings.Contains(b.Body, want) {
 			t.Fatalf("missing %q: %s", want, b.Body)
 		}
@@ -70,11 +70,14 @@ func TestBatchesSummarizeTransitionsAndPreserveHistory(t *testing.T) {
 	}
 }
 
-func TestNormalBatchWindowAndDeliveredDownRecovery(t *testing.T) {
+func TestSingleAlertAndDeliveredDownRecovery(t *testing.T) {
 	s := testStore(t)
 	queueTransition(t, s, "a", false, 1000)
-	if b, err := s.notificationBatch(1009, false); err != nil || len(b.Seqs) != 0 {
-		t.Fatal("batch sent early", err)
+	if b, err := s.notificationBatch(1009, false, alertClock{}); err != nil || len(b.Seqs) != 0 {
+		t.Fatal("single alert sent before collection window", b, err)
+	}
+	if b, err := s.notificationBatch(1010, false, alertClock{}); err != nil || len(b.Seqs) != 1 || strings.HasPrefix(b.Body, "Alerts") {
+		t.Fatal("single alert given a batch header", b, err)
 	}
 	var messages []string
 	worker := notificationWorker{store: s, lastProbe: 1000, call: func(_ context.Context, method string, v url.Values) error {
@@ -224,7 +227,7 @@ func TestLegacyQueueAndAcknowledgementAtomicity(t *testing.T) {
 	if _, err := s.Exec("INSERT INTO outbox(body,created) VALUES('Historical alert',1000)"); err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.notificationBatch(1010, false)
+	b, err := s.notificationBatch(1010, false, alertClock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +312,7 @@ func TestLegacySchemaUpgrade(t *testing.T) {
 	}
 	defer s.Close()
 	queueTransition(t, s, "new", false, 1001)
-	b, err := s.notificationBatch(1011, false)
+	b, err := s.notificationBatch(1011, false, alertClock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +347,7 @@ func TestLongAlertIsTruncatedWithoutLosingEvent(t *testing.T) {
 	if err := s.recordAt(m, false, 100, "failed", true, time.Unix(1000, 0)); err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.notificationBatch(1010, false)
+	b, err := s.notificationBatch(1010, false, alertClock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,11 +375,11 @@ func TestFlappingStillDownUsesLatestOutageStart(t *testing.T) {
 	queueTransition(t, s, "a", false, 1000)
 	queueTransition(t, s, "a", true, 1060)
 	queueTransition(t, s, "a", false, 1100)
-	b, err := s.notificationBatch(1110, false)
+	b, err := s.notificationBatch(1110, false, alertClock{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.Body, "down since "+alertTime(1100)) || !strings.Contains(b.Body, "3 transitions") || strings.Contains(b.Body, "failed and recovered") {
+	if !strings.Contains(b.Body, "down since "+(alertClock{}).format(1100)) || !strings.Contains(b.Body, "3 transitions") || strings.Contains(b.Body, "failed and recovered") {
 		t.Fatal(b.Body)
 	}
 }
@@ -402,5 +405,60 @@ func TestCooldownStartsAfterRequestCompletes(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("request bypassed server cooldown")
+	}
+}
+
+func TestNotificationTimezoneAndSingleSummary(t *testing.T) {
+	clock, err := (Telegram{Timezone: "Asia/Tokyo", TimezoneLabel: "JST"}).alertClock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 1, 31, 18, 0, 0, 0, time.UTC).Unix()
+	if got := clock.format(at); got != "01 Feb 03:00:00 JST" {
+		t.Fatal(got)
+	}
+	s := testStore(t)
+	queueTransition(t, s, "a", false, at)
+	b, err := s.notificationBatch(at+10, false, clock)
+	if err != nil || len(b.Seqs) != 1 || strings.HasPrefix(b.Body, "Alerts") || !strings.Contains(b.Body, "01 Feb 03:00:00 JST") {
+		t.Fatal(b, err)
+	}
+	queueTransition(t, s, "a", true, at+60)
+	b, err = s.notificationBatch(at+60, true, clock)
+	if err != nil || len(b.Seqs) != 2 || strings.HasPrefix(b.Body, "Delayed alerts") || !strings.Contains(b.Body, "failed and recovered") || !strings.Contains(b.Body, "delayed delivery") {
+		t.Fatal(b, err)
+	}
+	if strings.Contains(b.Body, " UTC") {
+		t.Fatal("mixed notification timezones", b.Body)
+	}
+}
+
+func TestMultipleEventsRetainBatchWindow(t *testing.T) {
+	s := testStore(t)
+	queueTransition(t, s, "a", false, 1000)
+	b, err := s.notificationBatch(1008, false, alertClock{})
+	if err != nil || len(b.Seqs) != 0 {
+		t.Fatal("first alert escaped collection window", b, err)
+	}
+	queueTransition(t, s, "b", false, 1009)
+	b, err = s.notificationBatch(1009, false, alertClock{})
+	if err != nil || len(b.Seqs) != 0 {
+		t.Fatal("multiple alerts sent before batch window", b, err)
+	}
+	b, err = s.notificationBatch(1010, false, alertClock{})
+	if err != nil || len(b.Seqs) != 2 || !strings.HasPrefix(b.Body, "Alerts · ") {
+		t.Fatal(b, err)
+	}
+}
+
+func TestTelegramTimezoneValidation(t *testing.T) {
+	for _, config := range []Telegram{{Timezone: "Invalid/Zone"}, {TimezoneLabel: "bad\nlabel"}} {
+		if _, err := config.alertClock(); err == nil {
+			t.Fatal("invalid timezone settings accepted")
+		}
+	}
+	clock, err := (Telegram{}).alertClock()
+	if err != nil || !strings.HasSuffix(clock.format(1000), " UTC") {
+		t.Fatal("UTC default lost", err)
 	}
 }
