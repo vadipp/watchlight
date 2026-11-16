@@ -45,6 +45,11 @@ Build once with `docker compose build`. Copy `config.example.yaml` to
 (mode 0600, excluded from Git). Start with `docker compose up -d`. The host port
 is loopback-only; use a reverse proxy for public HTTPS. Containers run without
 root, with a read-only root filesystem and persistent named-volume storage.
+The primary also mounts a 32 MiB temporary filesystem at `/tmp` so SQLite can
+create scratch files when rolling detailed results into hourly history. This
+mount is disposable, has execution disabled, and counts toward the container's
+memory limit. Without a writable temporary directory, retention can fail with
+`SQLITE_IOERR_GETTEMPPATH` while ordinary checks continue.
 
 The separate watchdog file supports legacy Docker Compose 1.x as well:
 `docker-compose -f compose.watchdog.yaml up -d`. Load/build the same image on that
