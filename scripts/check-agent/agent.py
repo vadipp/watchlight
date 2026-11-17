@@ -19,6 +19,10 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
+import struct
+import uuid
+import pathlib
+import ipaddress
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -151,7 +155,31 @@ def command(argv, timeout=25):
 
 def probe(c):
     kind = c["kind"]
-    if kind == "any":
+    if kind == "transport":
+        result = json.loads(command(c["argv"]))
+        if result.get("ok") is not True:
+            error = result.get("error", {})
+            code = error.get("code", "probe")
+            if code not in ("http_status", "dns", "tls", "timeout", "connection", "content", "probe"):
+                code = "probe"
+            raise ProbeFailure(code, error.get("http_status") if code == "http_status" else None)
+    elif kind == "dns_udp":
+        ident = os.urandom(2)
+        name = b"".join(bytes([len(p)]) + p.encode("ascii") for p in c["name"].rstrip(".").split(".")) + b"\0"
+        query = ident + struct.pack("!HHHHH", 0x0100, 1, 0, 0, 0) + name + struct.pack("!HH", 1, 1)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as conn:
+            conn.settimeout(8)
+            conn.connect((c["host"], c["port"]))
+            conn.send(query)
+            response = conn.recv(4096)
+        if len(response) < 12 or response[:2] != ident:
+            raise ProbeFailure("content")
+        flags, _, answers, _, _ = struct.unpack("!HHHHH", response[2:12])
+        if not flags & 0x8000 or flags & 0x020f or not answers:
+            raise ProbeFailure("dns")
+    elif kind == "mqtt":
+        mqtt_probe(c)
+    elif kind == "any":
         for candidate in c["checks"]:
             try:
                 probe(candidate)
@@ -177,7 +205,19 @@ def probe(c):
     elif kind == "compose":
         compose_probe(c)
     elif kind == "http":
-        output = request(c["url"], c.get("method", "GET"), c.get("headers"),
+        url = c.get("url")
+        if c.get("container"):
+            network = c["network"]
+            if not re.fullmatch(r"[a-zA-Z0-9_.-]+", network):
+                raise ProbeFailure("probe")
+            template = '{{(index .NetworkSettings.Networks "' + network + '").IPAddress}}'
+            address = command(["docker", "inspect", "--format", template, c["container"]]).decode().strip()
+            ipaddress.IPv4Address(address)
+            url = "http://" + address + ":" + str(c["port"]) + c["path"]
+        headers = dict(c.get("headers", {}))
+        if c.get("bearer_token_file"):
+            headers["Authorization"] = "Bearer " + pathlib.Path(c["bearer_token_file"]).read_text().strip()
+        output = request(url, c.get("method", "GET"), headers,
                          c.get("body", "").encode() if "body" in c else None, c.get("status", 200))
         if c.get("contains", "").encode() not in output:
             raise ProbeFailure("content")
@@ -254,6 +294,177 @@ def run_one(c, base, dry_run):
     return report is None
 
 
+def mqtt_probe(c):
+    def string(s):
+        b = s.encode("utf-8")
+        if len(b) > 4096:
+            raise ProbeFailure("probe")
+        return struct.pack("!H", len(b)) + b
+
+    deadline = time.monotonic() + 10
+    with socket.create_connection((c.get("host", "127.0.0.1"), c.get("port", 1883)), timeout=5) as conn:
+        def send(kind, body=b""):
+            n, length = len(body), b""
+            while True:
+                length += bytes([(n % 128) | (128 if n >= 128 else 0)])
+                n //= 128
+                if not n:
+                    break
+            conn.sendall(bytes([kind]) + length + body)
+
+        def read(n):
+            out = b""
+            while len(out) < n:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError()
+                conn.settimeout(remaining)
+                b = conn.recv(n - len(out))
+                if not b:
+                    raise ConnectionError()
+                out += b
+            return out
+
+        def packet():
+            kind = read(1)[0]
+            n, multiplier = 0, 1
+            for _ in range(4):
+                v = read(1)[0]
+                n += (v & 127) * multiplier
+                if not v & 128:
+                    if n > 65536:
+                        raise ProbeFailure("content")
+                    return kind, read(n)
+                multiplier *= 128
+            raise ProbeFailure("content")
+
+        flags = 2
+        body = string("monitor-" + uuid.uuid4().hex[:16])
+        if "username" in c:
+            flags |= 0xc0
+            body += string(c["username"]) + string(c["password"])
+        send(0x10, string("MQTT") + bytes([4, flags]) + struct.pack("!H", 15) + body)
+        kind, data = packet()
+        if kind != 0x20 or data != b"\0\0":
+            raise ProbeFailure("connection")
+        if not c.get("zigbee_base_topic"):
+            send(0xc0)
+            if packet() != (0xd0, b""):
+                raise ProbeFailure("content")
+        else:
+            base = c["zigbee_base_topic"]
+            topic = base + "/bridge/response/health_check"
+            send(0x82, b"\0\1" + string(topic) + b"\0")
+            kind, data = packet()
+            if kind != 0x90 or data != b"\0\1\0":
+                raise ProbeFailure("connection")
+            transaction = uuid.uuid4().hex
+            send(0x30, string(base + "/bridge/request/health_check") + json.dumps({"transaction": transaction}).encode())
+            for _ in range(16):
+                kind, data = packet()
+                if kind >> 4 != 3 or (kind >> 1) & 3 or len(data) < 2:
+                    raise ProbeFailure("content")
+                length = struct.unpack("!H", data[:2])[0]
+                if data[2:2+length].decode() != topic:
+                    continue
+                value = json.loads(data[2+length:])
+                if value.get("transaction") == transaction and not kind & 1:
+                    if value.get("status") != "ok" or value.get("data", {}).get("healthy") is not True:
+                        raise ProbeFailure("evidence")
+                    break
+            else:
+                raise ProbeFailure("stale")
+        send(0xe0)
+
+
+def export_metrics(config, checks, results):
+    host = config["metrics_host"]
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]+", host):
+        raise ValueError("invalid metric host")
+    now = time.time()
+    lines = [f'watchlight_collection,host={host} completed_timestamp={now}']
+    for check, (ok, duration) in zip(checks, results):
+        ident = check["id"]
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", ident):
+            raise ValueError("invalid metric identity")
+        lines.append(f'watchlight_probe,host={host},check={ident} success={int(ok)}i,duration_seconds={duration}')
+    fields = []
+    proc = pathlib.Path(config.get("proc_root", "/proc"))
+    for resource in ("cpu", "memory", "io"):
+        path = proc / "pressure" / resource
+        if path.exists():
+            for line in path.read_text().splitlines():
+                category, *values = line.split()
+                if category not in ("some", "full"):
+                    continue
+                for pair in values:
+                    key, value = pair.split("=")
+                    if key in ("avg10", "avg60", "avg300", "total"):
+                        number = float(value)
+                        if math.isfinite(number) and number >= 0:
+                            fields.append(f'pressure_{resource}_{category}_{key}={number}')
+    for line in (proc / "vmstat").read_text().splitlines():
+        key, value = line.split()
+        if key == "oom_kill":
+            fields.append(f'oom_kills_total={int(value)}i')
+    if fields:
+        lines.append(f'watchlight_host,host={host} ' + ",".join(fields))
+    if config.get("nginx_log"):
+        lines.extend(nginx_metrics(config, host))
+    path = pathlib.Path(config["metrics_path"])
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text("\n".join(lines) + "\n")
+    temporary.chmod(0o644)
+    os.replace(temporary, path)
+
+
+def nginx_metrics(config, host):
+    """Aggregate only a dedicated URL/IP-free JSON log; never export raw lines."""
+    path = pathlib.Path(config["nginx_log"])
+    state_path = pathlib.Path(config["metrics_path"]).with_name("nginx-counters.json")
+    state = json.loads(state_path.read_text()) if state_path.exists() else {"servers": {}}
+    stat = path.stat()
+    position = state.get("position", 0)
+    if state.get("inode") != stat.st_ino or stat.st_size < position:
+        position = 0
+    with path.open("rb") as stream:
+        stream.seek(position)
+        stop = position + 4 * 1024 * 1024
+        while stream.tell() < stop:
+            before = stream.tell()
+            line = stream.readline(8192)
+            if not line:
+                break
+            if not line.endswith(b"\n"):
+                stream.seek(before)
+                break
+            try:
+                value = json.loads(line)
+                server = value["server"]
+                if not re.fullmatch(r"[a-zA-Z0-9*_.-]{1,255}", server):
+                    continue
+                status, size, duration = int(value["status"]), int(value["bytes"]), float(value["duration"])
+                if not 100 <= status <= 599 or size < 0 or not math.isfinite(duration) or duration < 0:
+                    continue
+                if server not in state["servers"] and len(state["servers"]) >= 64:
+                    continue
+                counts = state["servers"].setdefault(server, {"requests": 0, "errors": 0, "bytes": 0, "duration": 0})
+                counts["requests"] += 1
+                counts["errors"] += int(status >= 500)
+                counts["bytes"] += size
+                counts["duration"] += duration
+            except (ValueError, KeyError, TypeError):
+                continue
+        state["position"] = stream.tell()
+    state["inode"] = stat.st_ino
+    temporary = state_path.with_name(state_path.name + ".tmp")
+    temporary.write_text(json.dumps(state))
+    temporary.chmod(0o600)
+    os.replace(temporary, state_path)
+    return [f'nginx_requests,host={host},server={server} requests_total={v["requests"]}i,errors_total={v["errors"]}i,bytes_total={v["bytes"]}i,duration_sum_seconds={v["duration"]}'
+            for server, v in state["servers"].items()]
+
+
 def main():
     with open(sys.argv[1]) as f:
         config = json.load(f)
@@ -268,8 +479,18 @@ def main():
     if parsed.scheme != "https" and not config.get("allow_private_http", False):
         raise ValueError("HTTPS required")
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(lambda c: run_one(c, base.rstrip("/"), dry_run), config["checks"]))
-    return 0 if all(results) else 1
+        def timed(c):
+            start = time.monotonic()
+            ok = run_one(c, base.rstrip("/"), dry_run)
+            return ok, time.monotonic() - start
+        results = list(pool.map(timed, config["checks"]))
+    if config.get("metrics_path") and not dry_run:
+        try:
+            export_metrics(config, config["checks"], results)
+        except Exception:
+            print("collector: metric export failed", flush=True)
+            return 1
+    return 0 if all(ok for ok, _ in results) else 1
 
 
 if __name__ == "__main__":

@@ -98,3 +98,41 @@ General errors carry only an enumerated code and optional numeric HTTP status.
 Codes cover HTTP status, DNS, TLS, timeout, connection, content, command, stale
 evidence, certificate expiry, metrics, file and unclassified probe failures.
 Raw exceptions, URLs, headers, response bodies and command output are excluded.
+
+## Additional functional probes
+
+- `dns_udp`: `host`, `port`, `name`; sends an A query with a random transaction ID
+  and requires a matching successful, non-truncated response with an answer.
+- `mqtt`: `host`, `port`, optional `username`/`password`; authenticates and performs
+  a PING round trip. With `zigbee_base_topic`, it instead subscribes and requests
+  Zigbee2MQTT's read-only bridge health check, requiring a fresh matching
+  transaction and `healthy: true`. It does not control devices.
+- `transport`: `argv`; runs the bounded Go helper in `tools/transport-probe` and
+  forwards its structured error category or HTTP status. This supports real
+  HTTP/3 with no TCP fallback and authenticated HTTP/HTTPS CONNECT proxies.
+
+An `http` probe may use `container`, `network`, `port` and `path` instead of `url`.
+It resolves the current Docker address each cycle without reading environment
+variables. `bearer_token_file` reads an existing local token directly into the
+Authorization header; credential files need not move between hosts.
+
+## Metrics export
+
+Optional top-level `metrics_host` and `metrics_path` enable an atomic Influx line
+protocol snapshot after each completed cycle. The path must be inside the agent's
+allowed writable state directory. A Telegraf `inputs.file` with `data_format =
+"influx"` can ingest it through the existing host-filesystem mount.
+
+Measurements are `watchlight_collection` (completion timestamp), `watchlight_probe`
+(per-check success including delivery, and total round-trip duration), and
+`watchlight_host` (kernel OOM counter and available CPU/memory/I/O pressure data).
+No credentials, request URLs, response bodies or command output become labels.
+Pressure metrics are omitted on kernels without the pressure interface. Kernel
+OOM counters include killed child processes even when Docker's OOM flag is false.
+
+Optional `nginx_log` aggregates a dedicated JSON-lines log with only `server`,
+`status`, `bytes`, and `duration`. It reads at most 4 MiB per cycle, persists
+incremental counters beside the metrics file, and emits `nginx_requests` totals
+for requests, 5xx responses, bytes and duration. Configure rotation for that log.
+Aggregation is diagnostic: an unread rotation tail can be missed. URLs and client
+addresses must be excluded from the source log. Dry runs do not export metrics.
