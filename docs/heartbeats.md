@@ -98,3 +98,23 @@ identity characters, up to 128 characters. States are restricted to missing,
 exited, paused, restarting, dead, created, removing, unhealthy, starting and
 not-running. Unknown fields, arbitrary diagnostics and malformed reports are
 rejected without refreshing the heartbeat. Send names that contain no secrets.
+
+## Probe failure reports
+
+Other probes use the same endpoint and thresholds with an enumerated error:
+
+```json
+{"error":{"code":"http_status","http_status":500}}
+```
+
+The owner dashboard shows `HTTP 500`. Other codes are `dns`, `tls`, `timeout`,
+`connection`, `content`, `command`, `stale`, `certificate_expiring`, `metric`,
+`evidence`, `file`, and `probe` for an unclassified failure. Only `http_status`
+accepts a numeric `http_status` (100–599). Arbitrary messages and mixed container
+and probe reports are rejected. No URLs, bodies, credentials or command output
+are accepted. These details have the same private visibility as container reports.
+
+A fresh failure means the collector is reachable and the probe failed. An overdue
+heartbeat means no recent report arrived; this can indicate a stopped collector
+or failed delivery. Empty successful heartbeats clear the previous error. Upgrade
+the primary before collectors so new reports are understood before they are sent.

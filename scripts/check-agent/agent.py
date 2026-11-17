@@ -35,6 +35,30 @@ class ContainerFailure(ValueError):
         self.failures = failures
 
 
+class ProbeFailure(ValueError):
+    def __init__(self, code, http_status=None):
+        self.report = {"code": code}
+        if http_status is not None:
+            self.report["http_status"] = http_status
+
+
+def failure_report(error):
+    # Never transmit raw exceptions: they can contain credentials, URLs or output.
+    if isinstance(error, ProbeFailure):
+        return error.report
+    if isinstance(error, urllib.error.HTTPError):
+        return {"code": "http_status", "http_status": error.code}
+    if isinstance(error, urllib.error.URLError):
+        return failure_report(error.reason)
+    for kind, code in [(socket.gaierror, "dns"), (ssl.SSLError, "tls"),
+                       (TimeoutError, "timeout"), (subprocess.TimeoutExpired, "timeout"),
+                       (ConnectionError, "connection"), (FileNotFoundError, "file"),
+                       (PermissionError, "file"), (OSError, "connection")]:
+        if isinstance(error, kind):
+            return {"code": code}
+    return {"code": "probe"}
+
+
 def container_status(state):
     for flag, status in [("Paused", "paused"), ("Restarting", "restarting"), ("Dead", "dead")]:
         if state.get(flag):
@@ -96,7 +120,7 @@ def request(url, method="GET", headers=None, body=None, status=200):
         response = error
     with response:
         if response.status != status:
-            raise ValueError("unexpected status")
+            raise ProbeFailure("http_status", response.status)
         return response.read(1024 * 1024)
 
 
@@ -109,7 +133,7 @@ def timestamp(value):
 def fresh(value, max_age):
     age = time.time() - timestamp(value)
     if not 0 <= age <= max_age:
-        raise ValueError("stale or future timestamp")
+        raise ProbeFailure("stale")
 
 
 def command(argv, timeout=25):
@@ -117,7 +141,7 @@ def command(argv, timeout=25):
     try:
         output, _ = proc.communicate(timeout=timeout)
         if proc.returncode:
-            raise ValueError("command failed")
+            raise ProbeFailure("command")
         return output
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -134,11 +158,11 @@ def probe(c):
                 return
             except Exception:
                 pass
-        raise ValueError("no fresh successful evidence")
+        raise ProbeFailure("evidence")
     elif kind == "command":
         output = command(c["argv"], c.get("timeout", 25))
         if c.get("contains", "").encode() not in output:
-            raise ValueError("expected output missing")
+            raise ProbeFailure("content")
     elif kind == "docker":
         names = c["containers"]
         if not names or any(not name or name.startswith("-") for name in names):
@@ -156,7 +180,7 @@ def probe(c):
         output = request(c["url"], c.get("method", "GET"), c.get("headers"),
                          c.get("body", "").encode() if "body" in c else None, c.get("status", 200))
         if c.get("contains", "").encode() not in output:
-            raise ValueError("expected response missing")
+            raise ProbeFailure("content")
     elif kind == "timestamp":
         with open(c["path"]) as f:
             value = f.read().strip()
@@ -164,69 +188,70 @@ def probe(c):
             value = json.loads(value)
             for key, expected in c.get("require", {}).items():
                 if value.get(key) != expected:
-                    raise ValueError("result not successful")
+                    raise ProbeFailure("evidence")
             value = value[c["field"]]
         fresh(value, c["max_age"])
     elif kind == "file_age":
         fresh(os.stat(c["path"]).st_mtime, c["max_age"])
         with open(c["path"]) as f:
             if c.get("contains", "") not in f.read(65536):
-                raise ValueError("verification marker missing")
+                raise ProbeFailure("content")
     elif kind == "systemd":
         output = command(["systemctl", "show", c["unit"], "-p", "Result", "-p", "ExecMainExitTimestampMonotonic"])
         fields = dict(line.split("=", 1) for line in output.decode().splitlines() if "=" in line)
         if fields.get("Result") != "success":
-            raise ValueError("unit failed")
+            raise ProbeFailure("evidence")
         finished = int(fields.get("ExecMainExitTimestampMonotonic", 0)) / 1e6
         if not finished or not 0 <= time.clock_gettime(time.CLOCK_BOOTTIME) - finished <= c["max_age"]:
-            raise ValueError("unit missing or stale")
+            raise ProbeFailure("stale")
     elif kind == "certificate":
         with socket.create_connection((c["host"], c.get("port", 443)), timeout=10) as conn:
             with ssl.create_default_context().wrap_socket(conn, server_hostname=c["host"]) as tls:
                 expiry = ssl.cert_time_to_seconds(tls.getpeercert()["notAfter"])
                 if expiry - time.time() < c.get("days", 21) * 86400:
-                    raise ValueError("certificate expiring")
+                    raise ProbeFailure("certificate_expiring")
     elif kind == "certificate_file":
         command(["openssl", "x509", "-in", c["path"], "-noout", "-checkend", str(c.get("days", 21) * 86400)])
     elif kind == "query":
         url = c["url"] + "/api/v1/query?" + urllib.parse.urlencode({"query": c["query"]})
         response = json.loads(request(url))
         if response.get("status") != "success":
-            raise ValueError("query failed")
+            raise ProbeFailure("metric")
         values = response["data"]["result"]
         if len(values) != c.get("count", 1):
-            raise ValueError("missing or unexpected series")
+            raise ProbeFailure("metric")
         for item in values:
             sample_time, value = item["value"]
             fresh(sample_time, c.get("max_age", 120))
             value = float(value)
             if not math.isfinite(value) or not c.get("min", -math.inf) <= value <= c.get("max", math.inf):
-                raise ValueError("metric outside threshold")
+                raise ProbeFailure("metric")
     else:
         raise ValueError("unsupported probe")
 
 
 def run_one(c, base, dry_run):
+    report = None
     try:
         probe(c)
-        if not dry_run:
-            request(base + "/api/heartbeat/" + urllib.parse.quote(c["id"], safe=""),
-                    method="POST", headers={"Authorization": "Bearer " + c["token"]}, status=204)
-        print(c["id"] + ": ok", flush=True)
-        return True
     except ContainerFailure as error:
-        if not dry_run:
-            try:
-                request(base + "/api/heartbeat/" + urllib.parse.quote(c["id"], safe=""),
-                        method="POST", headers={"Authorization": "Bearer " + c["token"], "Content-Type": "application/json"},
-                        body=json.dumps({"failures": error.failures}).encode(), status=204)
-            except Exception:
-                pass
-        print(c["id"] + ": failed", flush=True)
-        return False
-    except Exception:
-        print(c["id"] + ": failed", flush=True)
-        return False
+        report = {"failures": error.failures}
+    except Exception as error:
+        report = {"error": failure_report(error)}
+    if not dry_run:
+        try:
+            headers = {"Authorization": "Bearer " + c["token"]}
+            if report is not None:
+                headers["Content-Type"] = "application/json"
+            kwargs = {"body": json.dumps(report).encode()} if report is not None else {}
+            request(base + "/api/heartbeat/" + urllib.parse.quote(c["id"], safe=""),
+                    method="POST", headers=headers, status=204, **kwargs)
+        except Exception:
+            print(c["id"] + ": delivery failed", flush=True)
+            return False
+    detail = json.dumps(report, sort_keys=True) if report else "ok"
+    print(c["id"] + ": " + detail, flush=True)
+    return report is None
 
 
 def main():

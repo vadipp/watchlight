@@ -91,6 +91,10 @@ func TestHeartbeatReportsRejectUnsafePayloads(t *testing.T) {
 	t.Setenv("REPORT_TOKEN", "test-token")
 	c := Config{Monitors: []Monitor{{ID: "stack", Type: "heartbeat", TokenEnv: "REPORT_TOKEN"}}}
 	for _, body := range []string{
+		`{"error":{"code":"secret"}}`, `{"error":{"code":"http_status","http_status":999}}`,
+		`{"error":{"code":"dns","http_status":500}}`, `{"error":{"code":"http_status"}}`,
+		`{"error":{"code":"tls","message":"secret"}}`,
+		`{"error":{"code":"tls"},"failures":[{"name":"worker","status":"exited"}]}`,
 		`{"failures":[{"name":"<script>","status":"exited"}]}`,
 		`{"failures":[{"name":"worker","status":"secret raw output"}]}`,
 		`{"failures":[],"output":"secret"}`, `{"failures":[]} {}`, strings.Repeat("x", 9000),
@@ -107,5 +111,45 @@ func TestHeartbeatReportsRejectUnsafePayloads(t *testing.T) {
 	s.QueryRow("SELECT count(*) FROM heartbeats").Scan(&n)
 	if n != 0 {
 		t.Fatal("invalid reports changed arrival")
+	}
+}
+
+func TestGeneralProbeReportRecoveryAndMissingCollector(t *testing.T) {
+	s := testStore(t)
+	t.Setenv("PROBE_TOKEN", "test-token")
+	m := Monitor{ID: "probe", Type: "heartbeat", TokenEnv: "PROBE_TOKEN", MaxAge: "5m", Timeout: "5s"}
+	c := Config{Monitors: []Monitor{m}}
+	send := func(body string) int {
+		r := httptest.NewRequest("POST", "/api/heartbeat/probe", strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer test-token")
+		w := httptest.NewRecorder()
+		handler(c, s).ServeHTTP(w, r)
+		return w.Code
+	}
+	for _, tc := range []struct{ body, detail string }{
+		{`{"error":{"code":"http_status","http_status":500}}`, "HTTP 500"},
+		{`{"error":{"code":"dns"}}`, "probe failed: dns"},
+		{`{"error":{"code":"tls"}}`, "probe failed: tls"},
+		{`{"error":{"code":"timeout"}}`, "probe failed: timeout"},
+	} {
+		if send(tc.body) != 204 {
+			t.Fatal("report rejected")
+		}
+		ok, _, detail := check(context.Background(), m, s)
+		if ok || detail != tc.detail {
+			t.Fatalf("lost diagnostic: %q", detail)
+		}
+		if _, err := s.Exec("UPDATE heartbeats SET time=? WHERE id=?", time.Now().Add(-10*time.Minute).Unix(), m.ID); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _, detail = check(context.Background(), m, s); ok || !strings.Contains(detail, "heartbeat overdue") {
+			t.Fatal("missing report not distinguished")
+		}
+	}
+	if send("") != 204 {
+		t.Fatal("recovery rejected")
+	}
+	if ok, _, detail := check(context.Background(), m, s); !ok || detail != "" {
+		t.Fatal("recovery failed")
 	}
 }

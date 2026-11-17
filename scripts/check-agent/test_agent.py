@@ -10,10 +10,29 @@ agent = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent)
 
 class AgentTests(unittest.TestCase):
-    def test_no_heartbeat_after_failure(self):
+    def test_failure_posts_sanitized_report(self):
         with patch.object(agent, "probe", side_effect=ValueError()), patch.object(agent, "request") as post:
             self.assertFalse(agent.run_one({"id":"fixture","token":"private"},"https://example.com",False))
-            post.assert_not_called()
+            self.assertEqual(__import__("json").loads(post.call_args.kwargs["body"]), {"error":{"code":"probe"}})
+    def test_error_categories_and_no_secret_output(self):
+        import json, socket, ssl, urllib.error, io
+        from contextlib import redirect_stdout
+        errors = [(urllib.error.HTTPError("https://example.com/private",500,"secret",{},None), {"code":"http_status","http_status":500}),
+                  (urllib.error.URLError(socket.gaierror("secret")), {"code":"dns"}),
+                  (ssl.SSLError("secret"), {"code":"tls"}),
+                  (TimeoutError("secret"), {"code":"timeout"}),
+                  (ConnectionRefusedError("secret"), {"code":"connection"}),
+                  (agent.ProbeFailure("content"), {"code":"content"})]
+        for error, expected in errors:
+            output = io.StringIO()
+            with patch.object(agent,"probe",side_effect=error), patch.object(agent,"request") as post, redirect_stdout(output):
+                self.assertFalse(agent.run_one({"id":"fixture","token":"private"},"https://example.com",False))
+                self.assertEqual(json.loads(post.call_args.kwargs["body"]), {"error":expected})
+            self.assertNotIn("secret", output.getvalue())
+    def test_delivery_failure_does_not_report_a_probe_failure(self):
+        with patch.object(agent,"probe"), patch.object(agent,"request",side_effect=TimeoutError()) as post:
+            self.assertFalse(agent.run_one({"id":"fixture","token":"private"},"https://example.com",False))
+            self.assertEqual(post.call_count,1)
     def test_success_sends_header_token(self):
         with patch.object(agent, "probe"), patch.object(agent, "request") as post:
             self.assertTrue(agent.run_one({"id":"fixture","token":"private"},"https://example.com",False))

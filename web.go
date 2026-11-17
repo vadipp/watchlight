@@ -366,10 +366,14 @@ func handler(c Config, s *Store) http.Handler {
 	})
 }
 
-// Only structured container identities and enumerated states are accepted.
+// Only structured container identities, states and probe error codes are accepted.
 // Raw command output, Docker errors and arbitrary diagnostic text are excluded.
 func heartbeatDetail(w http.ResponseWriter, r *http.Request) (string, error) {
 	var report struct {
+		Error *struct {
+			Code       string `json:"code"`
+			HTTPStatus int    `json:"http_status,omitempty"`
+		} `json:"error"`
 		Failures []struct {
 			Name   string `json:"name"`
 			Status string `json:"status"`
@@ -391,6 +395,26 @@ func heartbeatDetail(w http.ResponseWriter, r *http.Request) (string, error) {
 		return "", fmt.Errorf("trailing data")
 	}
 	parts := []string{}
+	if report.Error != nil {
+		if len(report.Failures) != 0 {
+			return "", fmt.Errorf("mixed failure report")
+		}
+		e := report.Error
+		if e.Code != "http_status" && e.HTTPStatus != 0 {
+			return "", fmt.Errorf("unexpected HTTP status")
+		}
+		switch e.Code {
+		case "http_status":
+			if e.HTTPStatus < 100 || e.HTTPStatus > 599 {
+				return "", fmt.Errorf("invalid HTTP status")
+			}
+			return fmt.Sprintf("HTTP %d", e.HTTPStatus), nil
+		case "dns", "tls", "timeout", "connection", "content", "command", "stale", "certificate_expiring", "metric", "evidence", "file", "probe":
+			return "probe failed: " + e.Code, nil
+		default:
+			return "", fmt.Errorf("invalid probe error")
+		}
+	}
 	for _, failure := range report.Failures {
 		if !containerIdentity.MatchString(failure.Name) {
 			return "", fmt.Errorf("invalid identity")

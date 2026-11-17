@@ -27,11 +27,12 @@ Only the heartbeat credential for each assigned monitor is needed on a host.
 }
 ```
 
-Each successful probe POSTs its token in the Authorization header. General failed probes
-send no heartbeat; the primary declares them down after their freshness/threshold
-window. Configure `max_age` on the primary to tolerate agent scheduling and probe
+Each successful probe POSTs its token in the Authorization header. Failed probes POST a structured error code and, for HTTP status failures, the numeric
+status. Fresh failures use the primary failure threshold. Missing reports separately
+expire after the freshness window. Configure `max_age` on the primary to tolerate agent scheduling and probe
 runtime (five minutes is a reasonable starting point for a one-minute timer).
-Probe failures and delivery failures log only monitor IDs, never command output,
+Probe failures log IDs and sanitized reports; delivery failures are logged separately.
+Neither includes command output,
 URLs, exception details or credentials. IDs must be non-secret.
 
 Probe kinds: `docker` (all named containers running, not paused/restarting/dead,
@@ -83,8 +84,8 @@ existing `docker` probe with an explicit `containers` list.
 
 Known container failures send a structured failure report with only names and
 enumerated states. Successful checks send an empty heartbeat to clear failures.
-Docker access/inspection failures send no heartbeat; expiry still detects the
-loss of evidence. General probes continue sending heartbeats only on success.
+Docker access/inspection failures send structured probe errors. All probes report
+failures; expiry detects missing collector or delivery evidence.
 Upgrade the primary to support structured reports before upgrading collectors;
 older primaries ignore bodies and would treat a failure report as a success.
 The owner dashboard shows failed members. No failure details enter public APIs.
@@ -92,3 +93,8 @@ The owner dashboard shows failed members. No failure details enter public APIs.
 Aggregate checks complement functional HTTP/protocol checks. A running container
 without a Docker health check only proves process liveness. The agent neither
 restarts containers nor changes Compose projects.
+
+General errors carry only an enumerated code and optional numeric HTTP status.
+Codes cover HTTP status, DNS, TLS, timeout, connection, content, command, stale
+evidence, certificate expiry, metrics, file and unclassified probe failures.
+Raw exceptions, URLs, headers, response bodies and command output are excluded.
