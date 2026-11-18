@@ -49,6 +49,8 @@ CREATE INDEX IF NOT EXISTS results_id_time ON results(id,time);
 CREATE TABLE IF NOT EXISTS incidents(id TEXT NOT NULL,status TEXT NOT NULL,time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY,body TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox_events(seq INTEGER PRIMARY KEY REFERENCES outbox(seq) ON DELETE CASCADE,monitor_id TEXT NOT NULL,name TEXT NOT NULL,status TEXT NOT NULL,down_since INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS outbox_observations(seq INTEGER PRIMARY KEY REFERENCES outbox(seq) ON DELETE CASCADE,observed_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS observation_windows(id TEXT PRIMARY KEY,fail_since INTEGER NOT NULL,pass_since INTEGER NOT NULL,down_since INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS hourly(id TEXT NOT NULL,hour INTEGER NOT NULL,total INTEGER NOT NULL,successes INTEGER NOT NULL,latency_sum REAL NOT NULL,latency_max REAL NOT NULL,PRIMARY KEY(id,hour));
 CREATE TABLE IF NOT EXISTS heartbeats(id TEXT PRIMARY KEY,time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS heartbeat_reports(id TEXT PRIMARY KEY,time INTEGER NOT NULL,detail TEXT NOT NULL);
@@ -158,6 +160,25 @@ func (s *Store) recordAt(m Monitor, ok bool, lat float64, detail string, notify 
 		}
 	}
 	old := v.Status
+	var failSince, passSince, downSince int64
+	e = tx.QueryRow("SELECT fail_since,pass_since,down_since FROM observation_windows WHERE id=?", m.ID).Scan(&failSince, &passSince, &downSince)
+	if e != nil && e != sql.ErrNoRows {
+		return e
+	}
+	if fp != configFP {
+		failSince, passSince = 0, 0
+	}
+	if ok {
+		failSince = 0
+		if passSince == 0 {
+			passSince = now
+		}
+	} else {
+		passSince = 0
+		if failSince == 0 {
+			failSince = now
+		}
+	}
 	if ok {
 		v.Pass++
 		v.Fail = 0
@@ -170,6 +191,20 @@ func (s *Store) recordAt(m Monitor, ok bool, lat float64, detail string, notify 
 		if v.Fail >= m.Failures {
 			v.Status = "down"
 		}
+	}
+	if v.Status == "down" && downSince == 0 {
+		if old == "down" {
+			// Preserve an incident already open when upgrading the application.
+			if e = tx.QueryRow("SELECT coalesce(max(time),0) FROM incidents WHERE id=? AND status='down'", m.ID).Scan(&downSince); e != nil {
+				return e
+			}
+		}
+		if downSince == 0 {
+			downSince = failSince
+		}
+	}
+	if _, e = tx.Exec("INSERT INTO observation_windows VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET fail_since=excluded.fail_since,pass_since=excluded.pass_since,down_since=excluded.down_since", m.ID, failSince, passSince, downSince); e != nil {
+		return e
 	}
 	_, e = tx.Exec("INSERT INTO results VALUES(?,?,?,?)", m.ID, now, ok, lat)
 	if e != nil {
@@ -210,6 +245,11 @@ func (s *Store) recordAt(m Monitor, ok bool, lat float64, detail string, notify 
 	}
 	if notify && recovered && !active {
 		if e = enqueueNotification(tx, m, "up", lat, detail, now, "; recovered and is visible again"); e != nil {
+			return e
+		}
+	}
+	if v.Status == "up" {
+		if _, e = tx.Exec("UPDATE observation_windows SET down_since=0 WHERE id=?", m.ID); e != nil {
 			return e
 		}
 	}

@@ -68,6 +68,10 @@ func TestBatchesSummarizeTransitionsAndPreserveHistory(t *testing.T) {
 	if n != 0 {
 		t.Fatal("orphan structured events")
 	}
+	s.QueryRow("SELECT count(*) FROM outbox_observations").Scan(&n)
+	if n != 0 {
+		t.Fatal("orphan observation timestamps")
+	}
 }
 
 func TestSingleAlertAndDeliveredDownRecovery(t *testing.T) {
@@ -99,6 +103,98 @@ func TestSingleAlertAndDeliveredDownRecovery(t *testing.T) {
 	}
 	if !strings.Contains(messages[1], "observed outage 1m0s") {
 		t.Fatal(messages[1])
+	}
+}
+
+func TestOutageObservationsIncludeGraceAndExcludeRecoveryConfirmation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "observations.db")
+	s, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testMonitor()
+	m.Failures, m.Successes = 5, 2
+	record := func(ok bool, at int64) {
+		t.Helper()
+		if err := s.recordAt(m, ok, 0, "", true, time.Unix(at, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(true, 900)
+	record(true, 930)
+	for _, at := range []int64{1000, 1031, 1065, 1095} {
+		record(false, at)
+	}
+	if queueCount(t, s) != 0 {
+		t.Fatal("alert before failure threshold")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	record(false, 1125)
+	b, err := s.notificationBatch(1140, false, alertClock{})
+	if err != nil || !strings.Contains(b.Body, "down since "+(alertClock{}).format(1000)) {
+		t.Fatalf("grace omitted from down time: %s %v", b.Body, err)
+	}
+	if err := s.acknowledgeBatch(b, deliveryState{}); err != nil {
+		t.Fatal(err)
+	}
+	// A success interrupted by another failure is not the recovery boundary.
+	record(true, 1155)
+	record(false, 1185)
+	record(true, 1215)
+	record(true, 1245)
+	b, err = s.notificationBatch(1260, false, alertClock{})
+	if err != nil || !strings.Contains(b.Body, "observed outage 3m35s") || !strings.Contains(b.Body, "recovered "+(alertClock{}).format(1215)) {
+		t.Fatalf("incorrect observation boundaries: %s %v", b.Body, err)
+	}
+	incidents, err := s.incidents(context.Background(), m.ID)
+	if err != nil || len(incidents) < 2 || incidents[0].Time != 1245 || incidents[1].Time != 1125 {
+		t.Fatalf("incident transition timestamps changed: %+v %v", incidents, err)
+	}
+}
+
+func TestOutageObservationsResetAfterShortFailureAndRecovery(t *testing.T) {
+	s := testStore(t)
+	m := testMonitor()
+	m.Failures, m.Successes = 3, 1
+	for _, r := range []struct {
+		at int64
+		ok bool
+	}{{900, true}, {1000, false}, {1030, true}, {1100, false}, {1130, false}, {1160, false}, {1190, true}, {1300, false}, {1330, false}, {1360, false}, {1390, true}} {
+		if err := s.recordAt(m, r.ok, 0, "", true, time.Unix(r.at, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := s.notificationBatch(1410, true, alertClock{})
+	if err != nil || !strings.Contains(b.Body, "total observed downtime 3m0s") || !strings.Contains(b.Body, (alertClock{}).format(1100)) {
+		t.Fatalf("outage streaks incorrectly accumulated: %s %v", b.Body, err)
+	}
+}
+
+func TestRecoveryOfIncidentOpenedBeforeObservationTracking(t *testing.T) {
+	s := testStore(t)
+	queueTransition(t, s, "legacy", false, 1000)
+	b, err := s.notificationBatch(1010, false, alertClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.acknowledgeBatch(b, deliveryState{}); err != nil {
+		t.Fatal(err)
+	}
+	// An older application left incident/state rows but no observation window.
+	if _, err := s.Exec("DELETE FROM observation_windows"); err != nil {
+		t.Fatal(err)
+	}
+	queueTransition(t, s, "legacy", true, 1090)
+	b, err = s.notificationBatch(1100, false, alertClock{})
+	if err != nil || !strings.Contains(b.Body, "observed outage 1m30s") {
+		t.Fatalf("legacy incident recovery lost: %s %v", b.Body, err)
 	}
 }
 
@@ -331,7 +427,7 @@ func TestStructuredEventInsertIsAtomic(t *testing.T) {
 	if err := s.record(m, false, 100, "failed", true); err == nil {
 		t.Fatal("expected event write failure")
 	}
-	for _, table := range []string{"outbox", "outbox_events", "states", "results", "incidents", "alert_states"} {
+	for _, table := range []string{"outbox", "outbox_events", "outbox_observations", "observation_windows", "states", "results", "incidents", "alert_states"} {
 		var n int
 		if err := s.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil || n != 0 {
 			t.Fatal("partial transition", table, err)

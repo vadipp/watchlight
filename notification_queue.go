@@ -19,10 +19,22 @@ import (
 // events transactionally so unsent transitions can be summarized without parsing.
 func enqueueNotification(tx *sql.Tx, m Monitor, status string, latency float64, detail string, now int64, suffix string) error {
 	down := now
+	observed := now
+	var passed, started int64
+	err := tx.QueryRow("SELECT pass_since,down_since FROM observation_windows WHERE id=?", m.ID).Scan(&passed, &started)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
 	if status == "up" {
 		if err := tx.QueryRow("SELECT coalesce(max(time),0) FROM incidents WHERE id=? AND status='down'", m.ID).Scan(&down); err != nil {
 			return err
 		}
+		if passed > 0 {
+			observed = passed
+		}
+	}
+	if started > 0 {
+		down = started
 	}
 	result, err := tx.Exec("INSERT INTO outbox(body,created) VALUES(?,?)", notificationBody(m, status, latency, detail)+suffix, now)
 	if err != nil {
@@ -33,6 +45,10 @@ func enqueueNotification(tx *sql.Tx, m Monitor, status string, latency float64, 
 		return err
 	}
 	_, err = tx.Exec("INSERT INTO outbox_events VALUES(?,?,?,?,?)", seq, m.ID, m.Name, status, down)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("INSERT INTO outbox_observations VALUES(?,?)", seq, observed)
 	return err
 }
 
@@ -153,8 +169,8 @@ func telegramText(s string, limit int) string {
 func telegramLength(s string) int { return len(utf16.Encode([]rune(s))) }
 
 func (s *Store) notificationBatch(now int64, delayed bool, clock alertClock) (notificationBatch, error) {
-	rows, err := s.Query(`SELECT o.seq,o.body,o.created,coalesce(e.monitor_id,''),coalesce(e.name,''),coalesce(e.status,''),coalesce(e.down_since,0)
- FROM outbox o LEFT JOIN outbox_events e ON e.seq=o.seq ORDER BY o.seq`)
+	rows, err := s.Query(`SELECT o.seq,o.body,o.created,coalesce(e.monitor_id,''),coalesce(e.name,''),coalesce(e.status,''),coalesce(e.down_since,0),coalesce(t.observed_at,o.created)
+ FROM outbox o LEFT JOIN outbox_events e ON e.seq=o.seq LEFT JOIN outbox_observations t ON t.seq=o.seq ORDER BY o.seq`)
 	if err != nil {
 		return notificationBatch{}, err
 	}
@@ -163,9 +179,9 @@ func (s *Store) notificationBatch(now int64, delayed bool, clock alertClock) (no
 	oldest := int64(0)
 	newest := int64(0)
 	for rows.Next() {
-		var seq, created, down int64
+		var seq, created, down, observed int64
 		var body, id, name, status string
-		if err = rows.Scan(&seq, &body, &created, &id, &name, &status, &down); err != nil {
+		if err = rows.Scan(&seq, &body, &created, &id, &name, &status, &down, &observed); err != nil {
 			return notificationBatch{}, err
 		}
 		if oldest == 0 || created < oldest {
@@ -185,12 +201,12 @@ func (s *Store) notificationBatch(now int64, delayed bool, clock alertClock) (no
 		if g.Status != status || g.Count == 0 {
 			g.Count++
 			if status == "up" && down > 0 {
-				g.Downtime += max(0, created-down)
+				g.Downtime += max(0, observed-down)
 			}
 		}
 		g.Status = status
 		g.Body = body
-		g.Last = created
+		g.Last = observed
 		g.Seqs = append(g.Seqs, seq)
 		g.DownSince = down
 		if down > 0 && (g.FirstDown == 0 || down < g.FirstDown) {

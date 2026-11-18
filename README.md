@@ -100,6 +100,12 @@ optionally `timezone_label` to a short display abbreviation. Timezone data is
 embedded for minimal container images. These settings affect notification text;
 stored event timestamps remain unchanged.
 Dashboard history retains every transition.
+Notification outage times span the first failed evaluation in the confirmed
+failure streak through the first successful evaluation in the confirmed recovery
+streak. They include the failure grace period and exclude recovery confirmation
+delay. These observation timestamps survive restarts; incident transition times
+still record when the configured thresholds were reached. An incident already
+open when upgrading may retain its previously recorded start time.
 
 Delivery failures use one persistent destination-wide exponential backoff, capped
 at one minute for network errors. Telegram flood-control responses respect
